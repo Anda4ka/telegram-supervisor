@@ -1,0 +1,14 @@
+services:
+  bot:
+    image: ghcr.io/anda4ka/telegram-supervisor:latest
+    container_name: supervisor-telegram
+    env_file: .env
+    environment:
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - ./moderator_userbot.session:/app/moderator_userbot.session
+      - bot-logs:/app/logs
+    restart: unless-stopped
+
+volumes:
+  bot-logs:

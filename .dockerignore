@@ -1,0 +1,60 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+.pytest_cache
+.coverage
+htmlcov/
+.mypy_cache
+.ruff_cache
+
+# Virtual environments
+.venv
+venv/
+env/
+ENV/
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Documentation
+CLAUDE.md
+docs/
+AGENTS.md
+
+# Secrets & sessions
+.env
+.env.local
+.env.development
+*.session
+*.session-journal
+
+# Tests
+tests/
+
+# Docker
+docker-compose*.yaml
+Dockerfile*
+.dockerignore
+
+# Logs & cache
+logs/
+.uv/
+
+# Frontend
+webapp/
+node_modules/
