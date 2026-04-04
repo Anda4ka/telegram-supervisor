@@ -141,8 +141,16 @@ class EscalationService:
         logger.info("escalation_timeout_tasks_cancelled")
 
     @classmethod
-    async def recover_stale_escalations(cls, session_maker: async_sessionmaker[AsyncSession]) -> None:
-        """On startup, mark stale pending escalations as timed out."""
+    async def recover_stale_escalations(
+        cls,
+        session_maker: async_sessionmaker[AsyncSession],
+        bot: Bot | None = None,
+    ) -> None:
+        """On startup, mark stale pending escalations as timed out and execute the default action.
+
+        Without bot, only marks DB status (action not executed — logged as warning).
+        With bot, actually executes the timeout action (mute/ban/etc).
+        """
         async with session_maker() as db:
             now = utc_now()
             stmt = select(AgentEscalation).where(
@@ -152,13 +160,45 @@ class EscalationService:
             result = await db.execute(stmt)
             stale = result.scalars().all()
 
+            default_action = settings.moderation.default_timeout_action
             for esc in stale:
                 esc.status = EscalationStatus.TIMEOUT
-                esc.resolved_action = settings.moderation.default_timeout_action
+                esc.resolved_action = default_action
                 esc.resolved_at = now
             if stale:
                 await db.commit()
                 logger.info("Recovered stale escalations", count=len(stale))
+
+            # Execute timeout actions if bot is available and action isn't "ignore"
+            if bot and default_action != "ignore":
+                for esc in stale:
+                    try:
+                        from app.agent.schemas import AgentEvent, EventType
+                        from app.moderation.agent import AgentCore
+
+                        event = AgentEvent(
+                            event_type=EventType.TIMEOUT,
+                            chat_id=esc.chat_id,
+                            chat_title=None,
+                            message_id=0,
+                            reporter_id=0,
+                            target_user_id=esc.target_user_id,
+                            target_username=None,
+                            target_display_name=str(esc.target_user_id),
+                            target_message_text=esc.message_text,
+                        )
+                        async with session_maker() as action_db:
+                            agent_core = AgentCore()
+                            await agent_core.execute_action(default_action, event, bot, action_db)
+                        logger.info("Recovery action executed", escalation_id=esc.id, action=default_action)
+                    except Exception:
+                        logger.exception("Recovery action failed", escalation_id=esc.id)
+            elif stale and default_action != "ignore" and not bot:
+                logger.warning(
+                    "Stale escalations marked as timeout but action NOT executed (no bot at recovery time)",
+                    count=len(stale),
+                    action=default_action,
+                )
 
     async def _send_escalation_message(
         self,

@@ -22,8 +22,7 @@ if TYPE_CHECKING:
 logger = get_logger("assistant.agent")
 
 SYSTEM_PROMPT = """\
-You are **Konnekt Assistant** — the central AI managing the Konnekt Telegram ecosystem \
-(educational community for CIS students in Czech Republic).
+You are **Supervisor Assistant** — the central AI managing a Telegram community platform.
 
 # Architecture
 
@@ -56,7 +55,7 @@ You control two interconnected systems via your tools:
 - You can trigger the pipeline manually, or create posts on-demand from any topic.
 
 ## Managed chats (moderation)
-- The bot moderates educational group chats (mute, ban, blacklist, welcome messages).
+- The bot moderates group chats (mute, ban, blacklist, welcome messages).
 - Global **blacklist** bans users across ALL managed chats simultaneously.
 - **AI moderation agent** (separate LLM) can analyze reported messages and auto-execute actions.
 
@@ -164,9 +163,10 @@ def create_assistant_agent(model_name: str = "") -> Agent[AssistantDeps, str]:
     )
     model = OpenAIChatModel(model_name, provider=provider)
 
+    prompt = settings.assistant.system_prompt or SYSTEM_PROMPT
     agent: Agent[AssistantDeps, str] = Agent(
         model,
-        system_prompt=SYSTEM_PROMPT,
+        system_prompt=prompt,
         deps_type=AssistantDeps,
         output_type=str,
         retries=3,

@@ -140,6 +140,10 @@ class AssistantSettings(BaseSettings):
         default="anthropic/claude-sonnet-4-6",
         description="Model for the assistant bot (channel/chat management)",
     )
+    system_prompt: str = Field(
+        default="",
+        description="Custom system prompt override for assistant (empty = use default)",
+    )
 
 
 class TelethonSettings(BaseSettings):

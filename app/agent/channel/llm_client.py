@@ -17,16 +17,22 @@ logger = get_logger("channel.llm_client")
 
 
 def _is_transient_error(exc: BaseException) -> bool:
-    """Only retry on timeouts and transient HTTP status codes (401, 429, 5xx).
+    """Only retry on timeouts and transient HTTP status codes (429, 5xx).
 
-    401 is included because OpenRouter intermittently returns it under load
-    instead of 429 — confirmed by logs showing ~45% 401 failure rate with
-    the same valid API key.
+    401 is retried ONLY if the response body suggests a transient issue
+    (OpenRouter intermittently returns 401 under load instead of 429).
+    A real auth failure (invalid API key) is NOT retried.
     """
     if isinstance(exc, httpx.TimeoutException):
         return True
     if isinstance(exc, httpx.HTTPStatusError):
-        return exc.response.status_code in (401, 429, 502, 503, 504)
+        status = exc.response.status_code
+        if status in (429, 502, 503, 504):
+            return True
+        if status == 401:
+            # Distinguish transient 401 (OpenRouter load) from real auth failure
+            body = exc.response.text.lower()
+            return "invalid api key" not in body and "invalid_api_key" not in body
     return False
 
 
@@ -49,14 +55,17 @@ def _is_transient_pydanticai_error(exc: BaseException) -> bool:
     if isinstance(exc, httpx.TimeoutException):
         return True
     if isinstance(exc, httpx.HTTPStatusError):
-        return exc.response.status_code in (401, 429, 502, 503, 504)
+        return _is_transient_error(exc)
 
     # PydanticAI-specific error types
     try:
         from pydantic_ai.exceptions import ModelHTTPError, UnexpectedModelBehavior
 
         if isinstance(exc, ModelHTTPError):
-            return exc.status_code in (401, 429, 500, 502, 503, 504)
+            if exc.status_code == 401:
+                body = str(getattr(exc, "body", "")).lower()
+                return "invalid api key" not in body and "invalid_api_key" not in body
+            return exc.status_code in (429, 500, 502, 503, 504)
         if isinstance(exc, UnexpectedModelBehavior):
             # Retry on generic model misbehavior (often transient)
             return True

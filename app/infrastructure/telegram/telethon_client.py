@@ -325,13 +325,12 @@ class TelethonClient:
 
         async def _fetch() -> Any:
             entity = await self._client.get_input_entity(chat_id)  # type: ignore[union-attr]
-            from telethon.tl.functions.messages import EditMessageRequest
-
-            parsed_text, entities = await self._client._parse_message_text(text, parse_mode)  # type: ignore[union-attr]
-            return await self._client(  # type: ignore[misc]
-                EditMessageRequest(
-                    peer=entity, id=message_id, message=parsed_text, entities=entities, schedule_date=None
-                )
+            # Use public edit_message API instead of private _parse_message_text
+            return await self._client.edit_message(  # type: ignore[union-attr]
+                entity,
+                message_id,
+                text,
+                parse_mode=parse_mode,
             )
 
         try:

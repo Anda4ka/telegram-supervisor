@@ -8,7 +8,6 @@ Both polling loops run concurrently via asyncio.gather().
 from __future__ import annotations
 
 import asyncio
-import os
 from typing import TYPE_CHECKING, Any
 
 from aiogram import Bot, Dispatcher
@@ -54,11 +53,8 @@ async def on_startup(bot: Bot) -> None:
             logger.info("telethon_started")
 
         # Start analytics collector after Telethon is connected
-        from dotenv import load_dotenv
-
-        load_dotenv()
-        _analytics_enabled = os.environ.get("CHANNEL_ANALYTICS_ENABLED", "").lower() == "true"
-        if telethon_client and _analytics_enabled:
+        channel_config = settings.channel
+        if telethon_client and channel_config.analytics_enabled:
             try:
                 from sqlalchemy import text as sa_text
 
@@ -67,26 +63,26 @@ async def on_startup(bot: Bot) -> None:
                     _r = await _s.execute(sa_text("SELECT telegram_id FROM channels WHERE enabled = true"))
                     _channel_ids = [row[0] for row in _r.fetchall()]
 
-                # Also track the public channel @grassfoundationn for analytics
-                _public_channel = int(os.environ.get("CHANNEL_ANALYTICS_PUBLIC_ID", "0"))
-                if _public_channel and _public_channel not in _channel_ids:
-                    _channel_ids.append(_public_channel)
+                if channel_config.analytics_public_id and channel_config.analytics_public_id not in _channel_ids:
+                    _channel_ids.append(channel_config.analytics_public_id)
 
                 if _channel_ids:
                     from app.agent.channel.analytics import AnalyticsCollector
 
-                    _interval = int(os.environ.get("CHANNEL_ANALYTICS_INTERVAL_MINUTES", "120"))
-                    _lookback = int(os.environ.get("CHANNEL_ANALYTICS_LOOKBACK_DAYS", "30"))
                     collector = AnalyticsCollector(
-                        client=telethon_client._client,
+                        client=telethon_client.client,
                         session_maker=sm,
                         channel_ids=_channel_ids,
-                        interval_minutes=_interval,
-                        lookback_days=_lookback,
+                        interval_minutes=channel_config.analytics_interval_minutes,
+                        lookback_days=channel_config.analytics_lookback_days,
                     )
                     collector.start()
                     container.set_analytics_collector(collector)
-                    logger.info("analytics_collector_enabled", channels=len(_channel_ids), interval=_interval)
+                    logger.info(
+                        "analytics_collector_enabled",
+                        channels=len(_channel_ids),
+                        interval=channel_config.analytics_interval_minutes,
+                    )
             except Exception:
                 logger.exception("analytics_collector_init_failed")
 
@@ -304,11 +300,6 @@ async def main() -> None:
 
     # Phase 1: Initialize shared services
     _init_escalation_recovery(session_maker)
-    if settings.moderation.enabled and settings.openrouter.api_key:
-        from app.moderation.escalation import EscalationService
-
-        await EscalationService.recover_stale_escalations(session_maker)
-
     telethon_client = _init_telethon()
 
     # Phase 2: Setup main bot first (needed as main_bot dep for assistant)
@@ -318,6 +309,12 @@ async def main() -> None:
         include_review_router=not assistant_enabled,
     )
     setup_container(session_maker, main_bot)
+
+    # Phase 1b: Recover stale escalations (needs bot to execute timeout actions)
+    if settings.moderation.enabled and settings.openrouter.api_key:
+        from app.moderation.escalation import EscalationService
+
+        await EscalationService.recover_stale_escalations(session_maker, bot=main_bot)
 
     # Phase 2b: Auto-resolve channel telegram_ids via Bot API
     await _resolve_channel_ids(main_bot, session_maker)

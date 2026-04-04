@@ -70,6 +70,12 @@ class ChannelAgentSettings(BaseSettings):
         default=0.85, description="Cosine similarity threshold to consider items as duplicates (0-1)"
     )
 
+    # Analytics
+    analytics_enabled: bool = Field(default=False, description="Enable post analytics collection via Telethon")
+    analytics_interval_minutes: int = Field(default=120, description="How often to collect analytics")
+    analytics_lookback_days: int = Field(default=30, description="How far back to collect metrics")
+    analytics_public_id: int = Field(default=0, description="Additional public channel ID to track")
+
     model_config = SettingsConfigDict(
         env_prefix="CHANNEL_",
         case_sensitive=False,
