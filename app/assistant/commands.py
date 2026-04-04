@@ -6,24 +6,47 @@ saving tokens and providing instant responses with inline keyboards.
 
 from __future__ import annotations
 
-import os
-
 from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
+from app.core.config import settings
 from app.core.logging import get_logger
 
 logger = get_logger("assistant.commands")
 
 commands_router = Router(name="assistant_commands")
 
-# Public channel for analytics (the real channel, not the private test channel)
-_PUBLIC_CHANNEL_ID = int(os.environ.get("CHANNEL_ANALYTICS_PUBLIC_ID", "-1001952807891"))
-_PUBLIC_CHANNEL_NAME = "@grassfoundationn"
 
-# Private channel where bot publishes
-_BOT_CHANNEL_ID = int(os.environ.get("CHANNEL_TELEGRAM_ID", "-1002086726135"))
+_PUBLIC_CHANNEL_ID: int = 0
+_BOT_CHANNEL_ID: int = 0
+_PUBLIC_CHANNEL_NAME: str = ""
+_channels_resolved: bool = False
+
+
+async def _resolve_channel_ids() -> None:
+    """Lazy-resolve channel IDs from DB on first use (not import time)."""
+    global _PUBLIC_CHANNEL_ID, _BOT_CHANNEL_ID, _PUBLIC_CHANNEL_NAME, _channels_resolved  # noqa: PLW0603
+    if _channels_resolved:
+        return
+    try:
+        from app.core.container import container
+
+        sm = container.get_session_maker()
+        from sqlalchemy import select
+
+        from app.infrastructure.db.models import Channel
+
+        async with sm() as session:
+            result = await session.execute(select(Channel).where(Channel.enabled.is_(True)).limit(1))
+            ch = result.scalar_one_or_none()
+            if ch:
+                _BOT_CHANNEL_ID = ch.telegram_id
+                _PUBLIC_CHANNEL_NAME = f"@{ch.username}" if ch.username else ch.name
+                _PUBLIC_CHANNEL_ID = settings.channel.analytics_public_id or ch.telegram_id
+    except Exception:
+        logger.warning("channel_ids_resolve_failed", exc_info=True)
+    _channels_resolved = True
 
 
 # ──────────────────────────────────────────────
@@ -34,6 +57,7 @@ _BOT_CHANNEL_ID = int(os.environ.get("CHANNEL_TELEGRAM_ID", "-1002086726135"))
 @commands_router.message(Command("stats"))
 async def cmd_stats(message: Message) -> None:
     """Show analytics overview with inline navigation."""
+    await _resolve_channel_ids()
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -402,11 +426,13 @@ async def cmd_settings(message: Message) -> None:
 
 async def _build_settings_view() -> tuple[str, InlineKeyboardMarkup]:
     """Build settings message text and keyboard."""
+    await _resolve_channel_ids()
     from app.core.container import container
 
     sm = container.get_session_maker()
+    channel_config = settings.channel
 
-    # Read current values from DB + env
+    # Read current values from DB + config
     from sqlalchemy import text as sa_text
 
     async with sm() as session:
@@ -417,11 +443,11 @@ async def _build_settings_view() -> tuple[str, InlineKeyboardMarkup]:
         row = result.fetchone()
 
     max_posts = row[0] if row else "?"
-    interval = os.environ.get("CHANNEL_FETCH_INTERVAL_MINUTES", "20")
-    threshold = os.environ.get("CHANNEL_SCREENING_THRESHOLD", "7")
-    gen_model = os.environ.get("CHANNEL_GENERATION_MODEL", "?")
-    screen_model = os.environ.get("CHANNEL_SCREENING_MODEL", "?")
-    reason_model = os.environ.get("CHANNEL_REASONING_MODEL", "?")
+    interval = str(channel_config.fetch_interval_minutes)
+    threshold = str(channel_config.screening_threshold)
+    gen_model = channel_config.generation_model
+    screen_model = channel_config.screening_model
+    reason_model = channel_config.reasoning_model or channel_config.generation_model
 
     text = (
         "⚙️ <b>Настройки бота</b>\n\n"
@@ -482,7 +508,10 @@ async def cb_set_interval(callback: CallbackQuery) -> None:
 @commands_router.callback_query(F.data.startswith("set:interval:"))
 async def cb_set_interval_value(callback: CallbackQuery) -> None:
     """Apply interval change."""
+    import os
+
     value = callback.data.split(":")[2]  # type: ignore[union-attr]
+    # Runtime override — Pydantic settings are immutable, env var picked up on next config reload
     os.environ["CHANNEL_FETCH_INTERVAL_MINUTES"] = value
     await callback.answer(f"✅ Интервал: {value} мин (применится при следующем цикле)", show_alert=True)
     text, kb = await _build_settings_view()
@@ -563,7 +592,10 @@ async def cb_set_threshold(callback: CallbackQuery) -> None:
 @commands_router.callback_query(F.data.startswith("set:threshold:"))
 async def cb_set_threshold_value(callback: CallbackQuery) -> None:
     """Apply threshold change."""
+    import os
+
     value = callback.data.split(":")[2]  # type: ignore[union-attr]
+    # Runtime override — Pydantic settings are immutable, env var picked up on next config reload
     os.environ["CHANNEL_SCREENING_THRESHOLD"] = value
     await callback.answer(f"✅ Threshold: {value} (применится при следующем цикле)", show_alert=True)
     text, kb = await _build_settings_view()

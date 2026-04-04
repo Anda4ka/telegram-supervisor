@@ -21,11 +21,19 @@ EMBEDDING_DIMS = 768
 
 
 def _is_transient(exc: BaseException) -> bool:
-    """Retry on timeouts and transient HTTP errors (including OpenRouter's spurious 401s)."""
+    """Retry on timeouts and transient HTTP errors.
+
+    401 is retried only if it's a transient OpenRouter issue, not a real auth failure.
+    """
     if isinstance(exc, httpx.TimeoutException):
         return True
     if isinstance(exc, httpx.HTTPStatusError):
-        return exc.response.status_code in (401, 429, 502, 503, 504)
+        status = exc.response.status_code
+        if status in (429, 502, 503, 504):
+            return True
+        if status == 401:
+            body = exc.response.text.lower()
+            return "invalid api key" not in body and "invalid_api_key" not in body
     return False
 
 
