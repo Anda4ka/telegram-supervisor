@@ -678,7 +678,7 @@ async def call_with_openrouter_fallback(prompt, model):
 ### Priority 3: Observability Platform (1 week)
 
 8. **Deploy Langfuse self-hosted** via Docker
-   - Add to `docker-compose.dev.yaml`
+   - Add to `docker-compose.override.yaml`
    - Minimal resource usage (just needs PostgreSQL, which we already have)
    - Full tracing, cost dashboards, prompt versioning
    - Instrument PydanticAI calls with `@observe` decorator
