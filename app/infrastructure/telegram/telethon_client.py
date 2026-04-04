@@ -311,11 +311,15 @@ class TelethonClient:
     async def send_scheduled_photo(
         self, chat_id: int, photo: str, caption: str, schedule_date: Any, *, parse_mode: str | None = "html"
     ) -> MessageInfo | None:
+        if not self.is_available or self._client is None:
+            return None
+
         logger.info("Sending scheduled photo", chat_id=chat_id, schedule=str(schedule_date))
+        client = self._client
         msg = await self._call(
-            lambda: self._client.send_file(
+            lambda: client.send_file(
                 chat_id, photo, caption=caption, parse_mode=parse_mode, schedule=schedule_date
-            )  # type: ignore[union-attr]
+            )
         )
         return _msg_info(msg, chat_id, with_reply=False) if msg else None
 

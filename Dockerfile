@@ -11,12 +11,13 @@ RUN apk add --no-cache \
     protobuf-dev
 
 WORKDIR /app
+ENV UV_PYTHON=3.12
 
 # Copy dependency files for better caching
 COPY pyproject.toml uv.lock README.md ./
 
 # Install dependencies to virtual environment
-RUN uv sync --frozen --no-dev
+RUN uv sync --frozen --python 3.12 --no-dev
 
 # Development stage
 FROM ghcr.io/astral-sh/uv:0.8.11-alpine AS development
@@ -30,12 +31,13 @@ RUN apk add --no-cache \
     linux-headers
 
 WORKDIR /app
+ENV UV_PYTHON=3.12
 
 # Copy dependency files for better caching
 COPY pyproject.toml uv.lock README.md ./
 
 # Install ALL dependencies including dev for development
-RUN uv sync --frozen
+RUN uv sync --frozen --python 3.12
 
 # Copy application source code
 COPY app/ ./app/

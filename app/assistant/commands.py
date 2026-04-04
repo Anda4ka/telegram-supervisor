@@ -9,6 +9,7 @@ from __future__ import annotations
 from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import Message as TgMessage
 
 from app.core.config import settings
 from app.core.logging import get_logger
@@ -317,7 +318,7 @@ async def cb_sources_list(callback: CallbackQuery) -> None:
     async with sm() as session:
         result = await session.execute(
             sa_text("""
-                SELECT url, title, enabled, error_count, last_fetched_at::text
+                SELECT id, url, title, enabled, error_count, last_fetched_at::text
                 FROM channel_sources
                 WHERE source_type = :stype
                 ORDER BY enabled DESC, url
@@ -330,7 +331,7 @@ async def cb_sources_list(callback: CallbackQuery) -> None:
     lines = [f"{emoji} <b>Источники: {source_type}</b>\n"]
 
     buttons = []
-    for url, title, enabled, errors, last_fetch in rows:
+    for source_id, url, title, enabled, errors, last_fetch in rows:
         status = "✅" if enabled else "❌"
         name = title or url
         if len(name) > 45:
@@ -342,7 +343,7 @@ async def cb_sources_list(callback: CallbackQuery) -> None:
         # Toggle button
         action = "off" if enabled else "on"
         btn_text = f"{'❌' if enabled else '✅'} {name[:20]}"
-        buttons.append(InlineKeyboardButton(text=btn_text, callback_data=f"src:toggle:{url[:50]}:{action}"))
+        buttons.append(InlineKeyboardButton(text=btn_text, callback_data=f"src:toggle:{source_id}:{action}"))
 
     # Show first 10 toggle buttons max (Telegram limit)
     kb_rows = [[b] for b in buttons[:10]]
@@ -354,9 +355,9 @@ async def cb_sources_list(callback: CallbackQuery) -> None:
 
 @commands_router.callback_query(F.data.startswith("src:toggle:"))
 async def cb_source_toggle(callback: CallbackQuery) -> None:
-    """Toggle a source on/off."""
+    """Toggle a source on/off by primary key."""
     parts = callback.data.split(":", 3)  # type: ignore[union-attr]
-    url_prefix = parts[2]
+    source_id = int(parts[2])
     action = parts[3]  # "on" or "off"
     new_enabled = action == "on"
 
@@ -366,11 +367,16 @@ async def cb_source_toggle(callback: CallbackQuery) -> None:
 
     sm = container.get_session_maker()
     async with sm() as session:
-        await session.execute(
-            sa_text("UPDATE channel_sources SET enabled = :enabled WHERE url LIKE :url"),
-            {"enabled": new_enabled, "url": f"{url_prefix}%"},
+        result = await session.execute(
+            sa_text("UPDATE channel_sources SET enabled = :enabled WHERE id = :source_id"),
+            {"enabled": new_enabled, "source_id": source_id},
         )
         await session.commit()
+
+    rowcount = getattr(result, "rowcount", None)
+    if rowcount != 1:
+        await callback.answer("Источник не найден", show_alert=True)
+        return
 
     status = "✅ включён" if new_enabled else "❌ выключен"
     await callback.answer(f"Источник {status}", show_alert=True)
@@ -802,7 +808,7 @@ async def _edit_or_answer(
 ) -> None:
     """Edit the callback message or send a new one."""
     try:
-        if callback.message:
+        if isinstance(callback.message, TgMessage):
             await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
         else:
             await callback.answer(text[:200], show_alert=True)

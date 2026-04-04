@@ -6,7 +6,7 @@ import datetime
 from aiogram import Bot
 from aiogram.types import Message as TgMessage
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent.schemas import AgentEvent
@@ -92,22 +92,36 @@ class EscalationService:
         admin_id: int,
         action: str,
     ) -> AgentEscalation | None:
-        """Resolve an escalation with admin's chosen action."""
-        stmt = select(AgentEscalation).where(
-            AgentEscalation.id == escalation_id,
-            AgentEscalation.status == EscalationStatus.PENDING,
-        )
-        result = await self.db.execute(stmt)
-        escalation = result.scalar_one_or_none()
+        """Resolve an escalation with admin's chosen action.
 
-        if not escalation:
+        Uses an atomic UPDATE guarded by `status = pending` so concurrent timeout
+        handlers or duplicate admin clicks cannot both resolve the same escalation.
+        """
+        resolved_at = utc_now()
+        update_stmt = (
+            update(AgentEscalation)
+            .where(
+                AgentEscalation.id == escalation_id,
+                AgentEscalation.status == EscalationStatus.PENDING,
+            )
+            .values(
+                status=EscalationStatus.RESOLVED,
+                resolved_action=action,
+                resolved_by=admin_id,
+                resolved_at=resolved_at,
+            )
+        )
+        result = await self.db.execute(update_stmt)
+        rowcount = getattr(result, "rowcount", None)
+        if rowcount != 1:
+            await self.db.rollback()
             return None
 
-        escalation.status = EscalationStatus.RESOLVED
-        escalation.resolved_action = action
-        escalation.resolved_by = admin_id
-        escalation.resolved_at = utc_now()
         await self.db.commit()
+
+        stmt = select(AgentEscalation).where(AgentEscalation.id == escalation_id)
+        refreshed = await self.db.execute(stmt)
+        escalation = refreshed.scalar_one()
 
         # Cancel timeout task
         task = _timeout_tasks.pop(escalation_id, None)
@@ -264,21 +278,32 @@ class EscalationService:
             return
 
         async with self._session_maker() as db:
-            stmt = select(AgentEscalation).where(
-                AgentEscalation.id == escalation_id,
-                AgentEscalation.status == EscalationStatus.PENDING,
+            default_action = settings.moderation.default_timeout_action
+            resolved_at = utc_now()
+            update_stmt = (
+                update(AgentEscalation)
+                .where(
+                    AgentEscalation.id == escalation_id,
+                    AgentEscalation.status == EscalationStatus.PENDING,
+                )
+                .values(
+                    status=EscalationStatus.TIMEOUT,
+                    resolved_action=default_action,
+                    resolved_at=resolved_at,
+                )
             )
-            result = await db.execute(stmt)
-            escalation = result.scalar_one_or_none()
-
-            if not escalation:
+            result = await db.execute(update_stmt)
+            rowcount = getattr(result, "rowcount", None)
+            if rowcount != 1:
+                await db.rollback()
+                _timeout_tasks.pop(escalation_id, None)
                 return
 
-            default_action = settings.moderation.default_timeout_action
-            escalation.status = EscalationStatus.TIMEOUT
-            escalation.resolved_action = default_action
-            escalation.resolved_at = utc_now()
             await db.commit()
+
+            stmt = select(AgentEscalation).where(AgentEscalation.id == escalation_id)
+            refreshed = await db.execute(stmt)
+            escalation = refreshed.scalar_one()
 
             # Log timeout outcome as an admin override on the original decision
             if escalation.decision_id:

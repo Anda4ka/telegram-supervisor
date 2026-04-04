@@ -158,9 +158,10 @@ async def approve_post(
 
         source_urls = extract_source_urls(post)
 
+        slot_reserved = False
         try:
             # Atomically reserve a daily slot BEFORE publishing
-            from app.agent.channel.channel_repo import try_reserve_daily_slot
+            from app.agent.channel.channel_repo import release_reserved_daily_slot, try_reserve_daily_slot
 
             slot_reserved = await try_reserve_daily_slot(session_maker, post.channel_id)
             if not slot_reserved:
@@ -180,9 +181,14 @@ async def approve_post(
             )
             msg_id = await publish_fn(channel_id, gen_post)
             if not msg_id:
+                await release_reserved_daily_slot(session_maker, post.channel_id)
                 return "Failed to publish.", None
             post.approve(msg_id)
-            await session.commit()
+            try:
+                await session.commit()
+            except Exception:
+                logger.exception("approve_commit_failed_after_publish", post_id=post_id, msg_id=msg_id)
+                return "Post was published, but DB update failed. Manual reconciliation required.", msg_id
             logger.info("post_approved", post_id=post_id, msg_id=msg_id)
 
             # Invalidate feedback cache so next cycle picks up new approval
@@ -196,6 +202,10 @@ async def approve_post(
             return f"Published! (msg #{msg_id})", msg_id
         except Exception:
             logger.exception("approve_publish_error", post_id=post_id)
+            if slot_reserved:
+                from app.agent.channel.channel_repo import release_reserved_daily_slot
+
+                await release_reserved_daily_slot(session_maker, post.channel_id)
             return "Failed to publish.", None
 
 
@@ -223,6 +233,39 @@ async def reject_post(
         scheduled_tg_id = post.scheduled_telegram_id if was_scheduled else None
 
         source_urls = extract_source_urls(post)
+
+        # For scheduled posts, cancel the Telegram scheduled message BEFORE changing DB state.
+        if was_scheduled:
+            if not scheduled_tg_id:
+                logger.warning("scheduled_post_missing_telegram_id_on_reject", post_id=post_id)
+                return "Failed to cancel scheduled post. Try again."
+
+            try:
+                from app.core.container import container
+                from app.infrastructure.db.models import Channel
+
+                tc = container.get_telethon_client()
+                if not tc:
+                    return "Failed to cancel scheduled post. Telethon is unavailable."
+
+                ch_result = await session.execute(select(Channel).where(Channel.telegram_id == post.channel_id))
+                ch = ch_result.scalar_one_or_none()
+                if not ch:
+                    return "Failed to cancel scheduled post. Channel not found."
+
+                from app.agent.channel.schedule_manager import _resolve_chat_id
+
+                chat_id = _resolve_chat_id(ch)
+                deleted = await tc.delete_scheduled_messages(chat_id, [scheduled_tg_id])
+                if not deleted:
+                    return "Failed to cancel scheduled post. Try again."
+            except Exception:
+                logger.warning("cancel_scheduled_on_reject_failed", post_id=post_id, exc_info=True)
+                return "Failed to cancel scheduled post. Try again."
+
+            post.scheduled_at = None
+            post.scheduled_telegram_id = None
+
         post.reject(reason)
         await session.commit()
         logger.info("post_rejected", post_id=post_id)
@@ -231,24 +274,6 @@ async def reject_post(
         from app.agent.channel.feedback import invalidate_feedback_cache
 
         invalidate_feedback_cache(post.channel_id)
-
-        # Delete Telegram scheduled message if it was scheduled
-        if was_scheduled and scheduled_tg_id:
-            try:
-                from app.core.container import container
-                from app.infrastructure.db.models import Channel
-
-                tc = container.get_telethon_client()
-                if tc:
-                    ch_result = await session.execute(select(Channel).where(Channel.telegram_id == post.channel_id))
-                    ch = ch_result.scalar_one_or_none()
-                    if ch:
-                        from app.agent.channel.schedule_manager import _resolve_chat_id
-
-                        chat_id = _resolve_chat_id(ch)
-                        await tc.delete_scheduled_messages(chat_id, [scheduled_tg_id])
-            except Exception:
-                logger.warning("cancel_scheduled_on_reject_failed", post_id=post_id, exc_info=True)
 
         if source_urls:
             await update_source_relevance(session_maker, source_urls, approved=False)

@@ -3,7 +3,7 @@ name = "telegram-supervisor"
 version = "0.1.0"
 description = "AI-powered community management platform for Telegram — moderation, content pipeline, brand voice, analytics."
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.13"
 authors = [
     {name = "Anda4ka"},
 ]

@@ -11,6 +11,7 @@ from pydantic_ai import Agent, RunContext
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
+from app.agent.channel.sanitize import sanitize_external_text
 from app.agent.prompts import MODERATION_PROMPT
 from app.agent.schemas import ActionType, AgentDeps, AgentEvent, ModerationResult
 from app.core.config import settings
@@ -196,12 +197,14 @@ class AgentCore:
         ]
 
         if event.target_message_text:
-            parts.append(f"\nReported message:\n<user_message>\n{event.target_message_text}\n</user_message>")
+            sanitized_message = sanitize_external_text(event.target_message_text)
+            parts.append(f"\nReported message:\n<user_message>\n{sanitized_message}\n</user_message>")
 
         if event.context_messages:
             parts.append("\nRecent messages from this user in this chat:")
             for msg in event.context_messages[-5:]:
-                parts.append(f"<user_message>{msg.get('text', '[no text]')}</user_message>")
+                sanitized_context = sanitize_external_text(str(msg.get("text", "[no text]")))
+                parts.append(f"<user_message>{sanitized_context}</user_message>")
 
         return "\n".join(parts)
 

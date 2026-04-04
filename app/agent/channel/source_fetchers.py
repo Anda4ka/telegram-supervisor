@@ -91,8 +91,12 @@ class TelegramChannelFetcher:
             return []
 
         telethon_wrapper = container.get_telethon_client()
-        raw_client = telethon_wrapper.client if telethon_wrapper else None
-        if not raw_client or not telethon_wrapper.is_available:
+        if not telethon_wrapper or not telethon_wrapper.is_available:
+            logger.warning("telethon_not_connected_skipping_tg_channels")
+            return []
+
+        raw_client = telethon_wrapper.client
+        if not raw_client:
             logger.warning("telethon_not_connected_skipping_tg_channels")
             return []
 
@@ -133,8 +137,12 @@ class TelegramForumFetcher:
             return []
 
         telethon_wrapper = container.get_telethon_client()
-        raw_client = telethon_wrapper.client if telethon_wrapper else None
-        if not raw_client or not telethon_wrapper.is_available:
+        if not telethon_wrapper or not telethon_wrapper.is_available:
+            logger.warning("telethon_not_connected_skipping_tg_forums")
+            return []
+
+        raw_client = telethon_wrapper.client
+        if not raw_client:
             logger.warning("telethon_not_connected_skipping_tg_forums")
             return []
 

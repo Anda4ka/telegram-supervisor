@@ -85,7 +85,10 @@ async def mute_user(message: types.Message, bot: Bot) -> None:
             f"{mention} в муте на {mute_duration.time} {mute_duration.unit}!\n\n"
             f"Дата размута: {mute_duration.formatted_until_date()}"
         )
-        await message.reply_to_message.reply(text_mute)
+        reply_message = message.reply_to_message
+        if reply_message is None:
+            raise ValueError("reply_to_message is required for mute_user")
+        await reply_message.reply(text_mute)
         await message.delete()
 
     except Exception as err:

@@ -8,6 +8,7 @@ sent to admin via the moderator bot.
 
 from __future__ import annotations
 
+import time
 from typing import TYPE_CHECKING
 
 from aiogram import Bot, Router, types
@@ -35,6 +36,35 @@ ESCALATION_LABELS = {
     "ignore": "✅ Игнор",
 }
 
+_REPORTER_COOLDOWN_SECONDS = 15
+_REPORT_DEDUP_TTL_SECONDS = 120
+_report_cooldowns: dict[tuple[int, int], float] = {}
+_report_dedup: dict[tuple[int, int, int], float] = {}
+
+
+def _prune_report_cache[T](cache: dict[T, float], now: float) -> None:
+    expired = [key for key, expires_at in cache.items() if expires_at <= now]
+    for key in expired:
+        cache.pop(key, None)
+
+
+def _check_report_limits(*, chat_id: int, reporter_id: int, target_message_id: int) -> str | None:
+    now = time.monotonic()
+    _prune_report_cache(_report_cooldowns, now)
+    _prune_report_cache(_report_dedup, now)
+
+    dedup_key = (chat_id, reporter_id, target_message_id)
+    if dedup_key in _report_dedup:
+        return "Вы уже отправляли жалобу на это сообщение недавно."
+
+    cooldown_key = (chat_id, reporter_id)
+    if cooldown_key in _report_cooldowns:
+        return "Слишком часто. Подождите немного перед следующей жалобой."
+
+    _report_dedup[dedup_key] = now + _REPORT_DEDUP_TTL_SECONDS
+    _report_cooldowns[cooldown_key] = now + _REPORTER_COOLDOWN_SECONDS
+    return None
+
 
 @agent_router.message(Command("report", "spam"))
 async def handle_report(
@@ -53,6 +83,18 @@ async def handle_report(
     target = message.reply_to_message
     if not target.from_user:
         await message.answer("🚫 Не удалось определить автора сообщения.")
+        return
+
+    reporter_id = message.from_user.id if message.from_user else 0
+    limit_error = _check_report_limits(
+        chat_id=message.chat.id,
+        reporter_id=reporter_id,
+        target_message_id=target.message_id,
+    )
+    if limit_error:
+        answer = await message.answer(limit_error)
+        await message.delete()
+        sleep_and_delete(answer, 10)
         return
 
     # Build display name

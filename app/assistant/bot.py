@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any
 from aiogram import BaseMiddleware, Bot, Dispatcher, F, Router
 from aiogram.filters import CommandStart
 from aiogram.methods import SendMessageDraft
-from aiogram.types import Message, MessageEntity, TelegramObject  # noqa: TC002
+from aiogram.types import CallbackQuery, Message, MessageEntity, TelegramObject  # noqa: TC002
 
 from app.agent.channel.cost_tracker import extract_usage_from_pydanticai_result, log_usage
 from app.assistant.agent import AssistantDeps, create_assistant_agent
@@ -39,7 +39,7 @@ router = Router(name="assistant")
 
 
 class _SuperAdminOnlyMiddleware(BaseMiddleware):
-    """Reject messages from non-super-admins with a polite reply."""
+    """Reject non-super-admin assistant interactions with a polite reply."""
 
     async def __call__(
         self,
@@ -47,13 +47,19 @@ class _SuperAdminOnlyMiddleware(BaseMiddleware):
         event: TelegramObject,
         data: dict[str, Any],
     ) -> Any:
-        if isinstance(event, Message) and (not event.from_user or event.from_user.id not in _super_admins):
-            await event.answer("Этот бот доступен только для администраторов.")
-            return None
+        if isinstance(event, (Message, CallbackQuery)):
+            user = event.from_user
+            if not user or user.id not in _super_admins:
+                if isinstance(event, Message):
+                    await event.answer("Этот бот доступен только для администраторов.")
+                else:
+                    await event.answer("Этот бот доступен только для администраторов.", show_alert=True)
+                return None
         return await handler(event, data)
 
 
 router.message.middleware(_SuperAdminOnlyMiddleware())
+router.callback_query.middleware(_SuperAdminOnlyMiddleware())
 
 # Module-level references set during startup
 _agent: Agent[AssistantDeps, str] | None = None
@@ -304,6 +310,9 @@ def setup_assistant(
     )
     _super_admins = set(settings.admin.super_admins)
     dp = Dispatcher()
+    auth_middleware = _SuperAdminOnlyMiddleware()
+    dp.message.middleware(auth_middleware)
+    dp.callback_query.middleware(auth_middleware)
     # NOTE: do NOT include `router` here — bot.py adds channel_review_router
     # first (it must win over the generic F.text handler), then adds `router`.
 

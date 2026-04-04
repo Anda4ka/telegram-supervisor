@@ -125,38 +125,68 @@ async def try_reserve_daily_slot(
     session_maker: async_sessionmaker[AsyncSession],
     telegram_id: int,
 ) -> bool:
-    """Atomically check-and-increment the daily post count.
+    """Atomically reserve one daily publishing slot.
 
-    Returns ``True`` if a slot was reserved (count was below limit)
-    or if no channel row exists (no limit configured).
-    ``False`` only when the daily limit has actually been reached.
-    This prevents race conditions between concurrent pipeline runs / approvals.
+    Resets stale day counters as part of the same SQL statement so manual approve
+    flows cannot be blocked by yesterday's count.
+    Returns ``True`` when a slot was reserved or when no channel row exists.
+    Returns ``False`` only when the configured daily limit has been reached.
     """
     from sqlalchemy import text
+
+    today = datetime.now(UTC).strftime("%Y-%m-%d")
 
     async with session_maker() as session:
         result = await session.execute(
             text(
-                "UPDATE channels SET daily_posts_count = daily_posts_count + 1 "
-                "WHERE telegram_id = :tid AND daily_posts_count < max_posts_per_day "
+                "UPDATE channels "
+                "SET daily_posts_count = CASE "
+                "    WHEN daily_count_date IS NULL OR daily_count_date != :today THEN 1 "
+                "    ELSE daily_posts_count + 1 "
+                "END, "
+                "daily_count_date = :today "
+                "WHERE telegram_id = :tid "
+                "AND CASE "
+                "    WHEN daily_count_date IS NULL OR daily_count_date != :today THEN 0 "
+                "    ELSE daily_posts_count "
+                "END < max_posts_per_day "
                 "RETURNING daily_posts_count"
             ),
-            {"tid": telegram_id},
+            {"tid": telegram_id, "today": today},
         )
         row = result.fetchone()
         if row is not None:
             await session.commit()
             return True
 
-        # UPDATE matched no rows — either limit reached or no channel row exists.
-        # Check which case: if no channel row, there's no limit to enforce.
         exists = await session.execute(
             text("SELECT 1 FROM channels WHERE telegram_id = :tid"),
             {"tid": telegram_id},
         )
         await session.commit()
-        # No channel config → no limit to enforce; channel exists → limit reached
         return exists.fetchone() is None
+
+
+async def release_reserved_daily_slot(
+    session_maker: async_sessionmaker[AsyncSession],
+    telegram_id: int,
+) -> None:
+    """Release one previously reserved daily slot after a failed publish attempt."""
+    from sqlalchemy import text
+
+    async with session_maker() as session:
+        await session.execute(
+            text(
+                "UPDATE channels "
+                "SET daily_posts_count = CASE "
+                "    WHEN daily_posts_count > 0 THEN daily_posts_count - 1 "
+                "    ELSE 0 "
+                "END "
+                "WHERE telegram_id = :tid"
+            ),
+            {"tid": telegram_id},
+        )
+        await session.commit()
 
 
 async def update_source_discovery_time(

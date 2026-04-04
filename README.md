@@ -6,7 +6,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/status-alpha-orange" alt="Alpha">
-  <img src="https://img.shields.io/badge/python-3.12+-blue?logo=python&logoColor=white" alt="Python 3.12+">
+  <img src="https://img.shields.io/badge/python-3.12-blue?logo=python&logoColor=white" alt="Python 3.12">
   <img src="https://img.shields.io/badge/aiogram-3.x-blue?logo=telegram" alt="aiogram 3.x">
   <img src="https://img.shields.io/badge/PydanticAI-agents-purple" alt="PydanticAI">
   <img src="https://img.shields.io/badge/PostgreSQL-17-blue?logo=postgresql&logoColor=white" alt="PostgreSQL 17">
@@ -21,6 +21,19 @@
 A multi-agent system that manages Telegram communities and automates content pipelines. A general-purpose platform combining **mechanical moderation**, **AI-driven content generation**, and a **conversational admin interface**.
 
 The system runs **three separate Telegram identities** working in concert: a rule-enforcing moderator bot, an LLM-powered assistant, and a Telethon userbot for Client API features unavailable to standard bots.
+
+## What's New
+
+Recent reliability and quality improvements included in this update:
+
+- **Escalation race condition fixed** — admin resolution and timeout handling now use atomic guarded updates, so only one path can finalize an escalation
+- **Review/publish workflow hardened** — safer approve/reject/publish flow with better slot reservation, publish failure handling, and scheduled-post rejection behavior
+- **Source toggle fixed** — assistant source on/off actions now target source IDs instead of URL prefixes
+- **Moderation prompt sanitization improved** — reported messages and recent context are sanitized before entering LLM prompts
+- **/report and /spam throttling added** — duplicate reports are deduplicated and repeated spam-report abuse is rate-limited
+- **Type-check and callback safety cleanup** — several Optional/callback/Telethon typing edges were fixed
+- **CI and local setup tightened** — pinned `uv sync` flow for Python 3.12, Alembic smoke verification in CI, and safer cleanup behavior
+- **Integration tests behave correctly without Docker** — Docker-backed PostgreSQL tests are now skipped cleanly when no Docker daemon is available instead of failing during setup
 
 ## System Architecture
 
@@ -283,6 +296,13 @@ app/
 
 ## Quick Start
 
+### Prerequisites
+
+- **Python 3.12** and [uv](https://docs.astral.sh/uv/) (for local dev)
+- **PostgreSQL 17** with [pgvector](https://github.com/pgvector/pgvector) extension
+- **Telegram Bot Token** from [@BotFather](https://t.me/BotFather)
+- **OpenRouter API Key** from [openrouter.ai](https://openrouter.ai) (for AI features)
+
 ### One-Command Install (Docker)
 
 ```bash
@@ -318,7 +338,7 @@ cp .env.example .env   # fill in tokens, set DB_HOST=localhost
 docker compose up -d db
 
 # Install dependencies + run
-uv sync --dev
+uv sync --frozen --dev --python 3.12
 uv run alembic upgrade head
 uv run -m app.presentation.telegram
 ```
@@ -329,6 +349,28 @@ uv run -m app.presentation.telegram
 uv run python auth_telethon.py        # First-time Telethon session auth
 uv run python list_channels.py        # List all accessible channels/groups
 uv run python dump_channel_posts.py   # Dump channel posts for style analysis
+```
+
+### Test & Validation
+
+```bash
+# Full repository check
+uv run pytest -q
+uv run ruff check app tests
+uv run ty check
+
+# Optional: verify DB migrations locally
+uv run alembic upgrade head
+```
+
+Notes:
+
+- Integration tests that require **PostgreSQL via testcontainers** need a working Docker daemon
+- If Docker is unavailable, those tests are **skipped cleanly** instead of failing at setup time
+- For local development, the recommended dependency install is:
+
+```bash
+uv sync --frozen --dev --python 3.12
 ```
 
 ### Available Make Commands

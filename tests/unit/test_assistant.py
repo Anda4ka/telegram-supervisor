@@ -395,6 +395,18 @@ class TestSuperAdminMiddleware:
         mock.answer = AsyncMock()
         return mock
 
+    @staticmethod
+    def _make_callback_query(user_id: int):
+        """Create a callback query mock that passes isinstance checks."""
+        from aiogram.types import CallbackQuery
+
+        callback = MagicMock(spec=CallbackQuery)
+        callback.from_user = MagicMock()
+        callback.from_user.id = user_id
+        callback.answer = AsyncMock()
+        callback.data = "stats:overview"
+        return callback
+
     async def test_handle_message_non_admin_rejected(self) -> None:
         """Non-admin user should receive a rejection message from the middleware."""
         from app.assistant.bot import _SuperAdminOnlyMiddleware
@@ -432,6 +444,49 @@ class TestSuperAdminMiddleware:
 
         try:
             result = await middleware(mock_handler, msg, {})
+        finally:
+            bot._super_admins = saved_admins
+
+        assert result == "handler_result"
+        mock_handler.assert_awaited_once()
+
+    async def test_handle_callback_non_admin_rejected(self) -> None:
+        """Non-admin callback queries must be rejected too."""
+        from app.assistant.bot import _SuperAdminOnlyMiddleware
+
+        middleware = _SuperAdminOnlyMiddleware()
+        callback = self._make_callback_query(user_id=999999)
+        mock_handler = AsyncMock()
+
+        from app.assistant import bot
+
+        saved_admins = bot._super_admins
+        bot._super_admins = {111111}
+
+        try:
+            result = await middleware(mock_handler, callback, {})
+        finally:
+            bot._super_admins = saved_admins
+
+        assert result is None
+        callback.answer.assert_awaited_once_with("Этот бот доступен только для администраторов.", show_alert=True)
+        mock_handler.assert_not_called()
+
+    async def test_handle_callback_admin_allowed(self) -> None:
+        """Admin callback queries should pass through to the handler."""
+        from app.assistant.bot import _SuperAdminOnlyMiddleware
+
+        middleware = _SuperAdminOnlyMiddleware()
+        callback = self._make_callback_query(user_id=111111)
+        mock_handler = AsyncMock(return_value="handler_result")
+
+        from app.assistant import bot
+
+        saved_admins = bot._super_admins
+        bot._super_admins = {111111}
+
+        try:
+            result = await middleware(mock_handler, callback, {})
         finally:
             bot._super_admins = saved_admins
 
@@ -584,3 +639,68 @@ class TestGenerateAndReviewBotSelection:
             main_bot=AsyncMock(),
         )
         assert deps.review_bot is None
+
+
+class TestAssistantSourceCallbacks:
+    async def test_source_toggle_updates_by_source_id(self) -> None:
+        """Toggle callback must update exactly the requested source id."""
+        from app.assistant.commands import cb_source_toggle
+
+        callback = MagicMock()
+        callback.data = "src:toggle:42:on"
+        callback.answer = AsyncMock()
+
+        session = AsyncMock()
+        execute_result = MagicMock()
+        execute_result.rowcount = 1
+        session.execute = AsyncMock(return_value=execute_result)
+        session.commit = AsyncMock()
+
+        class _SessionCtx:
+            async def __aenter__(self):
+                return session
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        session_maker = MagicMock(return_value=_SessionCtx())
+
+        with patch("app.core.container.container.get_session_maker", return_value=session_maker):
+            await cb_source_toggle(callback)
+
+        session.execute.assert_awaited_once()
+        execute_call = session.execute.await_args_list[0]
+        query = execute_call.args[0].text
+        params = execute_call.args[1]
+        assert "WHERE id = :source_id" in query
+        assert params == {"enabled": True, "source_id": 42}
+        session.commit.assert_awaited_once()
+        callback.answer.assert_awaited_once_with("Источник ✅ включён", show_alert=True)
+
+    async def test_source_toggle_not_found_shows_alert(self) -> None:
+        """Missing source ids should produce a clear alert instead of silent success."""
+        from app.assistant.commands import cb_source_toggle
+
+        callback = MagicMock()
+        callback.data = "src:toggle:999:off"
+        callback.answer = AsyncMock()
+
+        session = AsyncMock()
+        execute_result = MagicMock()
+        execute_result.rowcount = 0
+        session.execute = AsyncMock(return_value=execute_result)
+        session.commit = AsyncMock()
+
+        class _SessionCtx:
+            async def __aenter__(self):
+                return session
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        session_maker = MagicMock(return_value=_SessionCtx())
+
+        with patch("app.core.container.container.get_session_maker", return_value=session_maker):
+            await cb_source_toggle(callback)
+
+        callback.answer.assert_awaited_once_with("Источник не найден", show_alert=True)

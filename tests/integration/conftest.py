@@ -15,23 +15,25 @@ from app.infrastructure.db.base import Base
 from sqlalchemy import text as sa_text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-# Skip entire module if docker is unavailable
-_docker_available = False
-try:
-    import docker
 
-    client = docker.from_env()
-    client.ping()
-    _docker_available = True
-except Exception:
-    pass
+def _docker_available() -> bool:
+    """Return True when a working Docker daemon is reachable."""
+    try:
+        import docker
 
-pytestmark = pytest.mark.skipif(not _docker_available, reason="Docker not available")
+        client = docker.from_env()
+        client.ping()
+    except Exception:
+        return False
+    return True
 
 
 @pytest.fixture(scope="session")
 def pg_container():
     """Start a PostgreSQL container for the test session."""
+    if not _docker_available():
+        pytest.skip("Docker daemon is not available for integration tests")
+
     from testcontainers.postgres import PostgresContainer
 
     with PostgresContainer("pgvector/pgvector:pg18", driver="asyncpg") as pg:

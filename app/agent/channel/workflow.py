@@ -242,7 +242,7 @@ async def screen_content(state: State) -> State:
 
         telethon_wrapper = container.get_telethon_client()
         raw_client = telethon_wrapper.client if telethon_wrapper else None
-        if raw_client and telethon_wrapper.is_available:
+        if telethon_wrapper and telethon_wrapper.is_available and raw_client:
             from app.agent.channel.external_sources.telegram_channels import (
                 fetch_own_channel_posts,
             )

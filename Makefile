@@ -9,7 +9,7 @@ help: ## Show this help message
 
 # Development setup
 install: ## Install dependencies
-	uv sync --dev
+	uv sync --frozen --dev --python 3.12
 
 setup-dev: install ## Setup development environment
 	uv run pre-commit install
@@ -105,7 +105,6 @@ clean: ## Clean up build artifacts and cache
 
 clean-all: clean ## Clean everything including virtual environment
 	rm -rf .venv/
-	rm -rf uv.lock
 	@echo "Full cleanup completed!"
 
 # Development helpers

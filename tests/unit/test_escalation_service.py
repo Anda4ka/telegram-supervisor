@@ -197,6 +197,13 @@ class TestEscalationResolve:
         result = await svc.resolve(esc.id, admin_id=123456789, action="ban")
         assert result is None
 
+    async def test_resolve_timed_out_escalation_returns_none(self, mock_bot: AsyncMock, db_session: AsyncSession):
+        esc = await self._seed_escalation(db_session, status="timeout")
+        svc = _make_service(mock_bot, db_session)
+
+        result = await svc.resolve(esc.id, admin_id=123456789, action="ban")
+        assert result is None
+
     async def test_resolve_cancels_timeout_task(self, mock_bot: AsyncMock, db_session: AsyncSession):
         esc = await self._seed_escalation(db_session)
 
@@ -293,6 +300,49 @@ class TestTimeoutHandler:
                 await svc._timeout_handler(999, 0)
         finally:
             EscalationService._session_maker = old_maker
+
+    @patch("app.moderation.escalation.settings")
+    async def test_timeout_handler_does_not_override_resolved_escalation(
+        self,
+        mock_settings: object,
+        mock_bot: AsyncMock,
+        db_session: AsyncSession,
+        db_session_maker: async_sessionmaker[AsyncSession],
+    ):
+        mock_settings.moderation.default_timeout_action = "ban"  # type: ignore[attr-defined]
+
+        esc = AgentEscalation(
+            chat_id=-100123,
+            target_user_id=222,
+            suggested_action="mute",
+            reason="test",
+            timeout_at=datetime.datetime.now(datetime.UTC) + datetime.timedelta(minutes=30),
+        )
+        esc.status = "resolved"
+        esc.resolved_action = "warn"
+        esc.resolved_by = 123456789
+        esc.resolved_at = datetime.datetime.now(datetime.UTC)
+        db_session.add(esc)
+        await db_session.commit()
+        await db_session.refresh(esc)
+
+        EscalationService.set_session_maker(db_session_maker)
+        svc = _make_service(mock_bot, db_session)
+
+        with (
+            patch("app.moderation.escalation.asyncio.sleep", new_callable=AsyncMock),
+            patch("app.moderation.agent.AgentCore.execute_action", new_callable=AsyncMock) as mock_execute,
+        ):
+            await svc._timeout_handler(esc.id, 0)
+
+        async with db_session_maker() as verify_session:
+            stmt = select(AgentEscalation).where(AgentEscalation.id == esc.id)
+            result = await verify_session.execute(stmt)
+            row = result.scalar_one()
+            assert row.status == "resolved"
+            assert row.resolved_action == "warn"
+
+        mock_execute.assert_not_called()
 
     @patch("app.moderation.escalation.settings")
     async def test_timeout_handler_writes_memory_override_when_decision_id_set(
