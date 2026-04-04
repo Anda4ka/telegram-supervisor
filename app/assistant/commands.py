@@ -413,6 +413,198 @@ async def cb_sources_back(callback: CallbackQuery) -> None:
 
 
 # ──────────────────────────────────────────────
+#  /setup — Quick channel setup wizard
+# ──────────────────────────────────────────────
+
+
+@commands_router.message(Command("setup"))
+async def cmd_setup(message: Message) -> None:
+    """Quick setup wizard — guides admin through adding a channel."""
+    text = (
+        "🧙 <b>Setup Wizard</b>\n\n"
+        "Привет! Давай настроим канал. Что нужно:\n\n"
+        "1️⃣ Добавь бота в канал как администратора\n"
+        "2️⃣ Перешли мне любое сообщение из канала\n"
+        "   (или отправь @username канала)\n"
+        "3️⃣ Я автоматически добавлю канал\n\n"
+        "Или используй кнопки для быстрых действий:"
+    )
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="📊 Показать мои каналы", callback_data="setup:list")],
+            [InlineKeyboardButton(text="🔍 Проверить здоровье", callback_data="setup:health")],
+            [InlineKeyboardButton(text="📖 Гайд по настройке", callback_data="setup:guide")],
+        ]
+    )
+    await message.answer(text, parse_mode="HTML", reply_markup=kb)
+
+
+@commands_router.callback_query(F.data == "setup:list")
+async def cb_setup_list(callback: CallbackQuery) -> None:
+    """Show existing channels."""
+    from app.core.container import container
+
+    sm = container.get_session_maker()
+    from sqlalchemy import select
+
+    from app.infrastructure.db.models import Channel
+
+    async with sm() as session:
+        result = await session.execute(select(Channel))
+        channels = list(result.scalars().all())
+
+    if not channels:
+        await callback.answer("Каналов пока нет. Перешли сообщение из канала!", show_alert=True)
+        return
+
+    lines = ["<b>Твои каналы:</b>\n"]
+    for ch in channels:
+        status = "✅" if ch.enabled else "⏸"
+        name = ch.name or str(ch.telegram_id)
+        username = f" (@{ch.username})" if ch.username else ""
+        schedule = ", ".join(ch.posting_schedule) if ch.posting_schedule else "не задано"
+        lines.append(f"{status} <b>{name}</b>{username}")
+        lines.append(f"   ID: <code>{ch.telegram_id}</code> | Расписание: {schedule}")
+        lines.append(f"   Постов/день: {ch.daily_posts_count}/{ch.max_posts_per_day}")
+    await _edit_or_answer(callback, "\n".join(lines))
+
+
+@commands_router.callback_query(F.data == "setup:health")
+async def cb_setup_health(callback: CallbackQuery) -> None:
+    """Run quick health check."""
+    from app.core.container import container
+    from app.core.healthcheck import run_healthcheck
+
+    report = await run_healthcheck(container.get_session_maker())
+    if callback.message:
+        await callback.message.edit_text(report.format_telegram(), parse_mode="HTML")
+    else:
+        await callback.answer("OK" if report.all_ok else "Issues found", show_alert=True)
+
+
+@commands_router.callback_query(F.data == "setup:guide")
+async def cb_setup_guide(callback: CallbackQuery) -> None:
+    """Show setup guide."""
+    text = (
+        "📖 <b>Полный гайд по настройке</b>\n\n"
+        "<b>1. Добавить канал:</b>\n"
+        "  Скажи мне: <i>«Добавь канал @username»</i>\n"
+        "  Или используй команду в AI-чате\n\n"
+        "<b>2. Добавить источники контента:</b>\n"
+        "  <i>«Добавь RSS https://example.com/feed»</i>\n"
+        "  <i>«Добавь Twitter @username»</i>\n"
+        "  <i>«Добавь Reddit r/LocalLLaMA»</i>\n\n"
+        "<b>3. Настроить расписание:</b>\n"
+        "  <i>«Поставь расписание 09:00, 15:00, 21:00»</i>\n\n"
+        "<b>4. Настроить review чат:</b>\n"
+        "  <i>«Поставь review чат на этот»</i>\n\n"
+        "<b>5. Мониторинг конкурентов:</b>\n"
+        "  <i>«Добавь конкурента @channel»</i>\n\n"
+        "<b>Полезные команды:</b>\n"
+        "  /stats — аналитика\n"
+        "  /sources — источники\n"
+        "  /calendar — календарь постов\n"
+        "  /settings — настройки\n"
+        "  /healthcheck — диагностика"
+    )
+    await _edit_or_answer(callback, text)
+
+
+# ──────────────────────────────────────────────
+#  /calendar — Content calendar (7 days)
+# ──────────────────────────────────────────────
+
+_DAY_NAMES = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
+
+
+@commands_router.message(Command("calendar"))
+async def cmd_calendar(message: Message) -> None:
+    """Show 7-day content calendar with scheduled posts and empty slots."""
+    await _resolve_channel_ids()
+    from datetime import timedelta
+
+    from app.core.container import container
+    from app.core.time import utc_now
+
+    sm = container.get_session_maker()
+    channel_id = _BOT_CHANNEL_ID
+    if not channel_id:
+        await message.answer("Канал не настроен.")
+        return
+
+    # Fetch scheduled posts for 7 days
+    from sqlalchemy import select
+
+    from app.core.enums import PostStatus
+    from app.infrastructure.db.models import ChannelPost
+
+    now = utc_now()
+    week_end = now + timedelta(days=7)
+
+    async with sm() as session:
+        result = await session.execute(
+            select(ChannelPost.id, ChannelPost.title, ChannelPost.scheduled_at).where(
+                ChannelPost.channel_id == channel_id,
+                ChannelPost.status == PostStatus.SCHEDULED,
+                ChannelPost.scheduled_at.is_not(None),
+                ChannelPost.scheduled_at >= now,
+                ChannelPost.scheduled_at < week_end,
+            ).order_by(ChannelPost.scheduled_at)
+        )
+        posts = result.all()
+
+    # Get best time recommendation
+    best_hour = None
+    try:
+        from app.agent.channel.best_time import recommend_posting_time
+
+        rec = await recommend_posting_time(sm, channel_id)
+        if rec:
+            best_hour = rec.get("recommended_time", "")
+    except Exception:
+        logger.debug("best_time_unavailable_for_calendar", exc_info=True)
+
+    # Group posts by day
+    from collections import defaultdict
+
+    by_day: dict[str, list[tuple[str, str]]] = defaultdict(list)
+    for post_id, title, sched_at in posts:
+        day_key = sched_at.strftime("%Y-%m-%d")
+        time_str = sched_at.strftime("%H:%M")
+        label = (title or "Без названия")[:40]
+        by_day[day_key].append((time_str, f"#{post_id} {label}"))
+
+    # Build calendar
+    lines = ["📅 <b>Контент-календарь</b> (7 дней)\n"]
+    today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    total_scheduled = 0
+
+    for i in range(7):
+        day = today + timedelta(days=i)
+        day_key = day.strftime("%Y-%m-%d")
+        day_name = _DAY_NAMES[day.weekday()]
+        date_label = day.strftime("%d.%m")
+        day_label = "Сегодня" if i == 0 else ("Завтра" if i == 1 else f"{day_name} {date_label}")
+
+        day_posts = by_day.get(day_key, [])
+        total_scheduled += len(day_posts)
+
+        if day_posts:
+            lines.append(f"<b>{day_label}</b>")
+            for time_str, label in day_posts:
+                lines.append(f"  ⏰ {time_str} — {label}")
+        else:
+            lines.append(f"<b>{day_label}</b> — <i>свободно</i>")
+
+    lines.append("")
+    lines.append(f"Всего запланировано: {total_scheduled}")
+    if best_hour:
+        lines.append(f"💡 Лучшее время: {best_hour} UTC")
+
+    await message.answer("\n".join(lines), parse_mode="HTML")
+
+
+# ──────────────────────────────────────────────
 #  /settings — Bot configuration
 # ──────────────────────────────────────────────
 
@@ -508,11 +700,9 @@ async def cb_set_interval(callback: CallbackQuery) -> None:
 @commands_router.callback_query(F.data.startswith("set:interval:"))
 async def cb_set_interval_value(callback: CallbackQuery) -> None:
     """Apply interval change."""
-    import os
-
-    value = callback.data.split(":")[2]  # type: ignore[union-attr]
-    # Runtime override — Pydantic settings are immutable, env var picked up on next config reload
-    os.environ["CHANNEL_FETCH_INTERVAL_MINUTES"] = value
+    value = int(callback.data.split(":")[2])  # type: ignore[union-attr]
+    # Mutate frozen Pydantic settings in-place so running orchestrator picks up the change
+    object.__setattr__(settings.channel, "fetch_interval_minutes", value)
     await callback.answer(f"✅ Интервал: {value} мин (применится при следующем цикле)", show_alert=True)
     text, kb = await _build_settings_view()
     await _edit_or_answer(callback, text, kb)
@@ -592,11 +782,9 @@ async def cb_set_threshold(callback: CallbackQuery) -> None:
 @commands_router.callback_query(F.data.startswith("set:threshold:"))
 async def cb_set_threshold_value(callback: CallbackQuery) -> None:
     """Apply threshold change."""
-    import os
-
-    value = callback.data.split(":")[2]  # type: ignore[union-attr]
-    # Runtime override — Pydantic settings are immutable, env var picked up on next config reload
-    os.environ["CHANNEL_SCREENING_THRESHOLD"] = value
+    value = int(callback.data.split(":")[2])  # type: ignore[union-attr]
+    # Mutate frozen Pydantic settings in-place so running orchestrator picks up the change
+    object.__setattr__(settings.channel, "screening_threshold", value)
     await callback.answer(f"✅ Threshold: {value} (применится при следующем цикле)", show_alert=True)
     text, kb = await _build_settings_view()
     await _edit_or_answer(callback, text, kb)
@@ -621,3 +809,19 @@ async def _edit_or_answer(
     except Exception:
         # If edit fails (message not modified), just answer the callback
         await callback.answer()
+
+
+# ──────────────────────────────────────────────
+#  /healthcheck — System diagnostics
+# ──────────────────────────────────────────────
+
+
+@commands_router.message(Command("healthcheck", "health", "status"))
+async def cmd_healthcheck(message: Message) -> None:
+    """Run health checks and report system status."""
+    from app.core.container import container
+    from app.core.healthcheck import run_healthcheck
+
+    wait_msg = await message.answer("🔍 Проверяю...")
+    report = await run_healthcheck(container.get_session_maker())
+    await wait_msg.edit_text(report.format_telegram(), parse_mode="HTML")

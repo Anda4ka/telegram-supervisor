@@ -608,6 +608,20 @@ async def send_for_review(state: State) -> State:
                         )
                         session.add(db_post)
                         await session.commit()
+                        post_db_id = db_post.id
+
+                    # Store embedding for future dedup (best-effort)
+                    try:
+                        from app.agent.channel.semantic_dedup import store_post_embedding
+
+                        await store_post_embedding(
+                            post_id=post_db_id,
+                            text_for_embedding=post.text[:300],
+                            api_key=api_key,
+                            session_maker=session_maker,
+                        )
+                    except Exception:
+                        logger.debug("direct_publish_embedding_failed", exc_info=True)
                 except Exception:
                     logger.warning("direct_publish_record_failed", msg_id=msg_id, exc_info=True)
 

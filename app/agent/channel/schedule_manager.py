@@ -133,21 +133,27 @@ async def schedule_post(
             logger.exception("resolve_chat_id_failed", channel=channel.telegram_id)
             return f"Cannot resolve channel {channel.telegram_id}."
 
-        # Send as scheduled message via Telethon (Markdown for formatting)
+        # Send as scheduled message via Telethon (no parse_mode — plain text)
+        # Post text is Markdown; Telethon doesn't support md_to_entities conversion,
+        # so we strip formatting to avoid broken parse_mode rendering.
+        from app.core.markdown import md_to_entities
+
+        plain_text, _entities = md_to_entities(post.post_text)
+
         if post.image_url:
             msg_info = await telethon_client.send_scheduled_photo(
                 chat_id=chat_id,
                 photo=post.image_url,
-                caption=post.post_text[:1024],
+                caption=plain_text[:1024],
                 schedule_date=publish_time,
-                parse_mode="md",
+                parse_mode=None,
             )
         else:
             msg_info = await telethon_client.send_scheduled_message(
                 chat_id=chat_id,
-                text=post.post_text,
+                text=plain_text,
                 schedule_date=publish_time,
-                parse_mode="md",
+                parse_mode=None,
             )
 
         if not msg_info:

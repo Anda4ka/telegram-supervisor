@@ -283,15 +283,27 @@ async def main() -> None:
     """Application entry point — coordinates all bots."""
     logger.info("starting", environment=settings.environment)
 
-    # Validate: features requiring OpenRouter API key
-    if settings.channel.enabled and not settings.openrouter.api_key:
-        raise ValueError("CHANNEL_ENABLED=true requires OPENROUTER_API_KEY")
-    if settings.moderation.enabled and not settings.openrouter.api_key:
-        raise ValueError("MODERATION_ENABLED=true requires OPENROUTER_API_KEY")
-    if settings.assistant.enabled and not settings.openrouter.api_key:
-        raise ValueError("ASSISTANT_BOT_ENABLED=true requires OPENROUTER_API_KEY")
-
     session_maker = create_session_maker()
+
+    # Phase 0: Health checks + sensible defaults
+    from app.core.healthcheck import run_healthcheck
+
+    health = await run_healthcheck(session_maker)
+    if not health.all_ok:
+        # Critical checks failed (DB or bot token) — cannot continue
+        raise SystemExit(f"Health check failed:\n{health.format_log()}")
+
+    # Graceful degradation: disable AI features if no OpenRouter key
+    if not settings.openrouter.api_key:
+        if settings.channel.enabled:
+            object.__setattr__(settings.channel, "enabled", False)
+            logger.warning("channel_agent_auto_disabled", reason="OPENROUTER_API_KEY not set")
+        if settings.moderation.enabled:
+            object.__setattr__(settings.moderation, "enabled", False)
+            logger.warning("moderation_agent_auto_disabled", reason="OPENROUTER_API_KEY not set")
+        if settings.assistant.enabled:
+            object.__setattr__(settings.assistant, "enabled", False)
+            logger.warning("assistant_bot_auto_disabled", reason="OPENROUTER_API_KEY not set")
 
     # Wire LLM cost tracker DB persistence
     from app.agent.channel.cost_tracker import set_usage_session_maker

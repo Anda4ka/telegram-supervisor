@@ -650,3 +650,99 @@ def register_channel_tools(agent: Agent[AssistantDeps, str]) -> None:
         if times:
             return f"Publish schedule set: {times} for {channel_id}. Approved posts will be scheduled."
         return f"Publish schedule cleared for {channel_id}. Posts will publish immediately on approve."
+
+    # ── Competitor Intelligence ──
+
+    @agent.tool
+    async def add_competitor(
+        ctx: RunContext[AssistantDeps],
+        channel_id: int,
+        competitor_url: str,
+        name: str = "",
+    ) -> str:
+        """Add a competitor Telegram channel to monitor. competitor_url is the channel @username or numeric ID (e.g. '@competitor_channel' or '-1001234567890'). name is an optional display name."""
+        from sqlalchemy import select
+
+        from app.infrastructure.db.models import ChannelSource
+
+        url = competitor_url.lstrip("@").strip()
+        async with ctx.deps.session_maker() as session:
+            existing = await session.execute(
+                select(ChannelSource).where(
+                    ChannelSource.channel_id == channel_id,
+                    ChannelSource.url == url,
+                )
+            )
+            if existing.scalar_one_or_none():
+                return f"Competitor {url} already added for channel {channel_id}."
+
+            source = ChannelSource(
+                channel_id=channel_id,
+                url=url,
+                source_type="competitor",
+                title=name or url,
+                added_by="admin",
+            )
+            session.add(source)
+            await session.commit()
+
+        return f"Competitor '{name or url}' added. Use get_competitor_report to see analysis."
+
+    @agent.tool
+    async def remove_competitor(
+        ctx: RunContext[AssistantDeps],
+        channel_id: int,
+        competitor_url: str,
+    ) -> str:
+        """Remove a competitor from monitoring."""
+        from sqlalchemy import delete
+
+        from app.infrastructure.db.models import ChannelSource
+
+        url = competitor_url.lstrip("@").strip()
+        async with ctx.deps.session_maker() as session:
+            result = await session.execute(
+                delete(ChannelSource).where(
+                    ChannelSource.channel_id == channel_id,
+                    ChannelSource.url == url,
+                    ChannelSource.source_type == "competitor",
+                )
+            )
+            deleted = result.rowcount  # type: ignore[union-attr]
+            await session.commit()
+
+        if deleted:
+            return f"Competitor {url} removed."
+        return f"Competitor {url} not found for channel {channel_id}."
+
+    @agent.tool
+    async def list_competitors(ctx: RunContext[AssistantDeps], channel_id: int) -> str:
+        """List all monitored competitors for a channel."""
+        from sqlalchemy import select
+
+        from app.infrastructure.db.models import ChannelSource
+
+        async with ctx.deps.session_maker() as session:
+            result = await session.execute(
+                select(ChannelSource).where(
+                    ChannelSource.channel_id == channel_id,
+                    ChannelSource.source_type == "competitor",
+                )
+            )
+            comps = result.scalars().all()
+
+        if not comps:
+            return "No competitors configured. Use add_competitor to add one."
+
+        lines = [f"Competitors for channel {channel_id}:\n"]
+        for c in comps:
+            status = "✅" if c.enabled else "❌"
+            lines.append(f"  {status} {c.title or c.url} ({c.url})")
+        return "\n".join(lines)
+
+    @agent.tool
+    async def get_competitor_report(ctx: RunContext[AssistantDeps], channel_id: int, days: int = 7) -> str:
+        """Generate competitor analysis — posting frequency, top topics, content patterns."""
+        from app.agent.channel.reports import generate_competitor_report
+
+        return await generate_competitor_report(ctx.deps.session_maker, channel_id, days=days)

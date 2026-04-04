@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 from typing import TYPE_CHECKING
 
 from app.core.logging import get_logger
@@ -169,7 +170,7 @@ async def _save_metric(
                 "views": views,
                 "forwards": forwards,
                 "reactions_count": reactions_count,
-                "reactions_breakdown": str(reactions_breakdown).replace("'", '"'),
+                "reactions_breakdown": json.dumps(reactions_breakdown),
                 "comments_count": comments_count,
                 "published_at": published_at,
                 "hours_since_publish": round(hours_since_publish, 1),
@@ -334,6 +335,22 @@ class AnalyticsCollector:
                         self.session_maker,
                         lookback_days=self.lookback_days,
                     )
+                    # Post-collection notification checks (viral posts, cost alerts)
+                    await self._run_notifications(channel_id)
                 except Exception:
                     logger.exception("analytics_loop_error", channel_id=channel_id)
             await asyncio.sleep(self.interval_minutes * 60)
+
+    async def _run_notifications(self, channel_id: int) -> None:
+        """Run notification checks after collecting metrics for a channel."""
+        try:
+            from app.core.container import container
+
+            bot = container.try_get_bot()
+            if not bot:
+                return
+            from app.agent.channel.notifications import run_post_collection_checks
+
+            await run_post_collection_checks(bot, self.session_maker, channel_id)
+        except Exception:
+            logger.debug("notification_checks_skipped", channel_id=channel_id, exc_info=True)

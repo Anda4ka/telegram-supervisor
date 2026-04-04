@@ -215,8 +215,11 @@ async def _edit_review_message(
         )
     except Exception as exc:
         if "message can't be edited" in str(exc).lower() or "there is no text" in str(exc).lower():
-            caption = text[:1024]
-            cap_entities = [e for e in entities if e.offset + e.length <= len(caption.encode("utf-16-le")) // 2]
+            # Telegram caption limit is 1024 UTF-16 code units; truncate safely
+            utf16 = text.encode("utf-16-le")
+            caption = utf16[: 1024 * 2].decode("utf-16-le", errors="ignore") if len(utf16) > 1024 * 2 else text
+            cap_len_utf16 = len(caption.encode("utf-16-le")) // 2
+            cap_entities = [e for e in entities if e.offset + e.length <= cap_len_utf16]
             await bot.edit_message_caption(
                 chat_id=chat_id,
                 message_id=message_id,

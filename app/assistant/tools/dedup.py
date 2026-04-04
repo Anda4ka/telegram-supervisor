@@ -214,3 +214,55 @@ def register_dedup_tools(agent: Agent[AssistantDeps, str]) -> None:
         except Exception:
             logger.exception("search_news_failed", query=query)
             return "Не удалось выполнить поиск. Проверьте логи."
+
+    @agent.tool
+    async def predict_engagement(ctx: RunContext[AssistantDeps], channel_id: int, post_text: str) -> str:
+        """Predict engagement potential for a post based on historical data. Returns 🟢/🟡/🔴 score with reasoning."""
+        error = await _validate_channel_id(ctx, channel_id)
+        if error:
+            return error
+
+        try:
+            from app.agent.channel.analytics import get_engagement_rate, get_hourly_performance
+
+            metrics = await get_engagement_rate(ctx.deps.session_maker, channel_id)
+            hourly = await get_hourly_performance(ctx.deps.session_maker, channel_id)
+
+            if metrics["total_posts"] < 5:
+                return "Недостаточно данных для прогноза (нужно минимум 5 постов с аналитикой)."
+
+            # Build context for LLM prediction
+            top_hours = sorted(hourly, key=lambda h: h["avg_views"], reverse=True)[:3]
+            hours_str = ", ".join(f"{h['hour']}:00 ({h['avg_views']:.0f} views)" for h in top_hours)
+
+            from app.agent.channel.llm_client import openrouter_chat_completion
+
+            prompt = (
+                f"Оцени потенциал вовлечённости поста для Telegram-канала.\n\n"
+                f"СТАТИСТИКА КАНАЛА (30 дней):\n"
+                f"- Постов: {metrics['total_posts']}\n"
+                f"- Avg views: {metrics['avg_views']}\n"
+                f"- Avg reactions: {metrics['avg_reactions']}\n"
+                f"- Avg engagement rate: {metrics['avg_engagement_rate']}%\n"
+                f"- Лучшие часы: {hours_str}\n\n"
+                f"ТЕКСТ ПОСТА:\n{post_text[:1500]}\n\n"
+                f"Оцени по шкале:\n"
+                f"🟢 Высокий — выше среднего, viral potential\n"
+                f"🟡 Средний — на уровне среднего\n"
+                f"🔴 Низкий — скорее всего ниже среднего\n\n"
+                f"Ответь ОДНОЙ строкой: emoji + прогноз views + короткое объяснение (1 предложение)."
+            )
+
+            response = await openrouter_chat_completion(
+                api_key=settings.openrouter.api_key,
+                model=settings.channel.screening_model,
+                messages=[{"role": "user", "content": prompt}],
+                operation="engagement_prediction",
+                channel_id=str(channel_id),
+                temperature=0.3,
+            )
+            return response or "Не удалось получить прогноз."
+
+        except Exception:
+            logger.exception("predict_engagement_failed", channel_id=channel_id)
+            return "Ошибка при прогнозировании. Проверьте логи."

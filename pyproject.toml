@@ -177,6 +177,7 @@ markers = [
     "unit: marks tests as unit tests",
     "e2e: marks tests as end-to-end tests",
     "performance: marks tests as performance tests",
+    "handlers: marks tests as handler tests",
 ]
 
 [tool.coverage.run]

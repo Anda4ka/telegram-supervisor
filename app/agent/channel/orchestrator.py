@@ -47,7 +47,10 @@ def _next_scheduled_time(schedule: list[str], now: datetime | None = None) -> da
         parts = entry.strip().split(":")
         if len(parts) != 2:
             raise ValueError(f"Invalid schedule entry: {entry!r}")
-        parsed.append((int(parts[0]), int(parts[1])))
+        hour, minute = int(parts[0]), int(parts[1])
+        if not (0 <= hour <= 23 and 0 <= minute <= 59):
+            raise ValueError(f"Invalid time in schedule: {entry!r} (hour must be 0-23, minute 0-59)")
+        parsed.append((hour, minute))
 
     parsed.sort()
 
@@ -81,6 +84,7 @@ class SingleChannelOrchestrator:
         self.api_key = api_key
         self.session_maker = session_maker
         self._task: asyncio.Task[None] | None = None
+        self._stop_event = asyncio.Event()
         self._pending_reviews: dict[int, dict[str, object]] = {}
 
     @property
@@ -107,18 +111,23 @@ class SingleChannelOrchestrator:
         )
 
     async def stop(self) -> None:
-        """Stop the background loop."""
+        """Stop the background loop gracefully (lets the current cycle finish)."""
+        self._stop_event.set()
         if self._task and not self._task.done():
-            self._task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._task
+            # Give the loop time to notice the stop event and finish gracefully
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(asyncio.shield(self._task), timeout=10)
+            if not self._task.done():
+                self._task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await self._task
         logger.info("single_channel_agent_stopped", channel_id=self.channel.telegram_id)
 
     async def _run_loop(self) -> None:
         """Main loop: discover sources, fetch content, screen, generate, send for review."""
         await asyncio.sleep(5)
 
-        while True:
+        while not self._stop_event.is_set():
             try:
                 await self._maybe_discover_sources()
                 await self._run_cycle()
@@ -130,7 +139,7 @@ class SingleChannelOrchestrator:
             await self._sleep_until_next()
 
     async def _sleep_until_next(self) -> None:
-        """Sleep until the next posting time (schedule or interval)."""
+        """Sleep until the next posting time (schedule or interval). Interruptible by stop_event."""
         schedule = self.channel.posting_schedule
         if schedule:
             now = utc_now()
@@ -142,9 +151,12 @@ class SingleChannelOrchestrator:
                 next_time=next_time.isoformat(),
                 delay_seconds=int(delay),
             )
-            await asyncio.sleep(delay)
         else:
-            await asyncio.sleep(self.config.fetch_interval_minutes * 60)
+            delay = self.config.fetch_interval_minutes * 60
+
+        # Wait for either delay or stop signal — whichever comes first
+        with contextlib.suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(self._stop_event.wait(), timeout=max(delay, 1))
 
     async def _maybe_discover_sources(self) -> None:
         """Run source discovery if enough time has passed (persisted in DB)."""

@@ -39,7 +39,7 @@ Full details: [`docs/architecture.md`](docs/architecture.md).
 
 ```
 app/
-├── core/              # Config (9 Pydantic classes), logging, DI container, enums, exceptions
+├── core/              # Config (9 Pydantic classes), logging, DI container, enums, healthcheck
 ├── moderation/        # AI moderation: agent, escalation, memory, blacklist, report, services
 ├── agent/             # AI agent infrastructure (prompts, schemas, tool_trace)
 │   └── channel/       # Content pipeline feature module
@@ -47,7 +47,8 @@ app/
 │       ├── workflow.py       # Burr state machine (10 actions, incl. reason_content)
 │       ├── brand_voice.py    # Brand Voice Engine: auto-analyze + style profiles
 │       ├── translate.py      # Multi-language translation with voice preservation
-│       ├── reports.py        # Analytics reports (weekly/monthly)
+│       ├── reports.py        # Analytics + competitor intelligence reports
+│       ├── notifications.py  # Smart alerts (viral posts, cost spikes)
 │       ├── generator.py      # LLM screening + post generation (дегенский стиль)
 │       ├── reasoning.py      # Chain-of-thought reasoning (отсеивает новости)
 │       ├── analytics.py      # Сбор метрик постов (views, reactions, forwards)
@@ -60,7 +61,7 @@ app/
 │       │   ├── twitter.py
 │       │   └── reddit.py
 │       └── http.py           # SSRF-protected HTTP client
-├── assistant/         # Conversational admin bot (PydanticAI, 30+ tools)
+├── assistant/         # Conversational admin bot (PydanticAI, 35+ tools, /setup /calendar /healthcheck)
 ├── infrastructure/    # DB models (SQLAlchemy), repositories, Telethon client
 └── presentation/      # Telegram handlers, middlewares, utils (buttons, blacklist)
 ```
@@ -75,6 +76,8 @@ app/
 - `app/core/time.py` — `utc_now()` helper for naive UTC datetimes
 - `app/presentation/telegram/bot.py` — main entry, dispatcher setup
 - `app/presentation/telegram/handlers/__init__.py` — router assembly, middleware wiring
+- `app/core/healthcheck.py` — Startup health checks (DB, Bot API, OpenRouter, Telethon)
+- `app/agent/channel/notifications.py` — Smart alerts (viral posts, cost spikes)
 - `channel_style_reference.md` — Анализ стиля канала @grassfoundationn
 
 ### LLM Models (OpenRouter)

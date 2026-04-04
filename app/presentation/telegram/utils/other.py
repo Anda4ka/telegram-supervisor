@@ -9,6 +9,8 @@ from aiogram import types
 from app.core.config import settings
 from app.core.text import escape_html
 
+_bg_tasks: set[asyncio.Task[None]] = set()
+
 
 async def _delete_later(message: types.Message, seconds: int) -> None:
     """Delete a message after a delay (background task)."""
@@ -19,7 +21,9 @@ async def _delete_later(message: types.Message, seconds: int) -> None:
 
 def sleep_and_delete(message: types.Message, seconds: int = 60) -> None:
     """Schedule a message for deletion after a delay (non-blocking)."""
-    asyncio.create_task(_delete_later(message, seconds))
+    task = asyncio.create_task(_delete_later(message, seconds))
+    _bg_tasks.add(task)
+    task.add_done_callback(_bg_tasks.discard)
 
 
 def get_user_mention(user: types.User) -> str:

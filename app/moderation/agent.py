@@ -281,6 +281,9 @@ class AgentCore:
             logger.error("Ban failed", error=str(e), user=event.target_user_id)
 
     async def _do_delete(self, event: AgentEvent, bot: Bot) -> None:
+        if not event.message_id:
+            logger.warning("delete_skipped_no_message_id", user=event.target_user_id)
+            return
         try:
             await bot.delete_message(event.chat_id, event.message_id)
         except Exception as e:
@@ -292,7 +295,7 @@ class AgentCore:
             await bot.send_message(
                 event.chat_id,
                 f"⚠️ {escape_html(event.target_display_name)}, {escape_html(text)}",
-                reply_to_message_id=event.message_id,
+                reply_to_message_id=event.message_id or None,
             )
         except Exception as e:
             logger.error("Warn failed", error=str(e), user=event.target_user_id)

@@ -182,7 +182,7 @@ async def _get_engagement_stats(
                 FROM post_analytics pa
                 JOIN channel_posts cp ON pa.message_id = cp.telegram_message_id AND cp.channel_id = pa.channel_id
                 WHERE pa.channel_id = :channel_id
-                AND pa.collected_at >= :cutoff {before_filter}
+                AND pa.measured_at >= :cutoff {before_filter}
                 ORDER BY pa.message_id, pa.measured_at DESC
             )
             SELECT
@@ -198,7 +198,7 @@ async def _get_engagement_stats(
         params: dict[str, Any] = {"channel_id": channel_id, "cutoff": after}
         if before:
             params["before"] = before
-            sql = base_sql.format(before_filter="AND pa.collected_at < :before")  # noqa: S608
+            sql = base_sql.format(before_filter="AND pa.measured_at < :before")  # noqa: S608
         else:
             sql = base_sql.format(before_filter="")
 
@@ -226,7 +226,7 @@ async def _get_top_posts(session: AsyncSession, channel_id: int, after: Any, lim
                     cp.title, pa.views, pa.reactions_count, pa.forwards
                 FROM post_analytics pa
                 JOIN channel_posts cp ON pa.message_id = cp.telegram_message_id AND cp.channel_id = pa.channel_id
-                WHERE pa.channel_id = :channel_id AND pa.collected_at >= :cutoff
+                WHERE pa.channel_id = :channel_id AND pa.measured_at >= :cutoff
                 ORDER BY pa.message_id, pa.measured_at DESC
             """),
             {"channel_id": channel_id, "cutoff": after},
@@ -510,3 +510,80 @@ class ReportScheduler:
                 await send_report_to_admin(self.bot, admin_chat_id, self.session_maker, channel_id, days=7)
             except Exception:
                 logger.exception("scheduled_report_failed", channel_id=channel_id)
+
+
+# ── Competitor Intelligence Report ──
+
+
+async def generate_competitor_report(
+    session_maker: async_sessionmaker[AsyncSession],
+    channel_id: int,
+    days: int = 7,
+) -> str:
+    """Generate a competitor analysis report for a channel.
+
+    Fetches posts from sources marked as ``source_type='competitor'``
+    and summarises topics, posting frequency, and content patterns.
+    """
+    from sqlalchemy import select
+
+    from app.infrastructure.db.models import ChannelSource
+
+    async with session_maker() as session:
+        result = await session.execute(
+            select(ChannelSource).where(
+                ChannelSource.channel_id == channel_id,
+                ChannelSource.source_type == "competitor",
+                ChannelSource.enabled == True,  # noqa: E712
+            )
+        )
+        competitors = list(result.scalars().all())
+
+    if not competitors:
+        return "Нет добавленных конкурентов. Используй add_competitor для добавления."
+
+    # Fetch recent posts from each competitor via Telethon
+    from app.core.container import container
+
+    tc = container.get_telethon_client()
+    if not tc or not tc.is_available:
+        return "Telethon не подключён — невозможно получить данные конкурентов."
+
+    from app.agent.channel.external_sources.telegram_channels import fetch_channel_posts
+
+    lines = [f"📊 **Competitor Report** ({days}d)\n"]
+
+    total_posts = 0
+    for comp in competitors:
+        try:
+            # url stores the channel id/username for telegram competitors
+            comp_id = comp.url
+            if comp_id.lstrip("-").isdigit():
+                comp_id = int(comp_id)
+
+            posts = await fetch_channel_posts(
+                tc.client,
+                comp_id,
+                max_items=50,
+                min_text_length=30,
+                hours_lookback=days * 24,
+            )
+            count = len(posts)
+            total_posts += count
+
+            # Extract top topics (first 60 chars of title)
+            top_titles = [p.title[:60] for p in posts[:5]]
+
+            name = comp.title or comp.url
+            lines.append(f"**{name}** — {count} постов")
+            if top_titles:
+                for t in top_titles:
+                    lines.append(f"  • {t}")
+            lines.append("")
+
+        except Exception:
+            logger.warning("competitor_fetch_failed", competitor=comp.url, exc_info=True)
+            lines.append(f"**{comp.title or comp.url}** — ❌ не удалось получить данные\n")
+
+    lines.insert(1, f"Всего постов у конкурентов: {total_posts}\n")
+    return "\n".join(lines)

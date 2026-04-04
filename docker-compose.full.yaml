@@ -1,0 +1,39 @@
+# docker-compose.full.yaml — All-in-one: PostgreSQL + pgvector + bot
+# Usage: docker compose -f docker-compose.full.yaml up -d
+# For production with pre-built image (no local build required).
+
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    container_name: supervisor-db
+    environment:
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-changeme}
+      POSTGRES_DB: ${DB_NAME:-supervisor_bot}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  bot:
+    image: ghcr.io/anda4ka/telegram-supervisor:latest
+    container_name: supervisor-telegram
+    env_file: .env
+    environment:
+      PYTHONUNBUFFERED: "1"
+      DB_HOST: db
+    volumes:
+      - ./moderator_userbot.session:/app/moderator_userbot.session
+      - bot-logs:/app/logs
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  bot-logs:

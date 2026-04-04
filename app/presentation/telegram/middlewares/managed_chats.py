@@ -25,8 +25,12 @@ def _evict_expired_cache() -> None:
         del _admin_cache[k]
 
 
-async def _is_managed_chat(bot: Bot, chat_id: int) -> bool:
-    """Check if bot's super admin is an admin in the chat (cached)."""
+async def _is_managed_chat(bot: Bot, chat_id: int) -> bool | None:
+    """Check if bot's super admin is an admin in the chat (cached).
+
+    Returns True/False for definitive answers, None when the check failed
+    (API error) so callers can distinguish "not managed" from "unknown".
+    """
     if len(_admin_cache) > _MAX_CACHE_SIZE:
         _evict_expired_cache()
     now = time.monotonic()
@@ -34,7 +38,10 @@ async def _is_managed_chat(bot: Bot, chat_id: int) -> bool:
     if cached and cached[1] > now:
         admin_ids = cached[0]
     else:
-        chat_admins = await bot.get_chat_administrators(chat_id)
+        try:
+            chat_admins = await bot.get_chat_administrators(chat_id)
+        except Exception:
+            return None
         admin_ids = {admin.user.id for admin in chat_admins}
         _admin_cache[chat_id] = (admin_ids, now + _CACHE_TTL)
 
@@ -59,11 +66,16 @@ class ManagedChatsMiddleware(BaseMiddleware):
             and event.message.chat.type in ["group", "supergroup"]
         ):
             message = event.message
-            if await _is_managed_chat(bot, message.chat.id):
+            managed = await _is_managed_chat(bot, message.chat.id)
+            if managed:
                 await history_service.merge_chat(db, message.chat)
                 return await handler(event, data)
 
-            # If no super admin in chat, leave
+            if managed is None:
+                # API error — can't determine, process message but don't leave
+                return await handler(event, data)
+
+            # Definitively not managed — leave
             await bot.leave_chat(message.chat.id)
             # Invalidate cache for this chat
             _admin_cache.pop(message.chat.id, None)

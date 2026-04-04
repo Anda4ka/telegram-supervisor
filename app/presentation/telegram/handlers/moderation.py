@@ -337,6 +337,12 @@ async def _show_blacklist_page(
     await message.delete()
 
 
+@moderation_router.callback_query(lambda c: c.data == "noop")
+async def handle_noop(callback: types.CallbackQuery) -> None:
+    """Acknowledge noop callbacks (e.g. page indicator button)."""
+    await callback.answer()
+
+
 @moderation_router.callback_query(BlacklistPagination.filter())
 async def handle_blacklist_pagination(
     callback: types.CallbackQuery,

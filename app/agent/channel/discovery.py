@@ -83,9 +83,9 @@ async def discover_content(
         if not content:
             return []
 
-        raw_items = content if isinstance(content, dict) else json.loads(content)
+        raw_items = content if isinstance(content, list) else json.loads(content) if isinstance(content, str) else None
         if not isinstance(raw_items, list):
-            logger.warning("discovery_unexpected_format", type=type(raw_items).__name__)
+            logger.warning("discovery_unexpected_format", type=type(raw_items).__name__ if raw_items else "None")
             return []
 
         items: list[ContentItem] = []

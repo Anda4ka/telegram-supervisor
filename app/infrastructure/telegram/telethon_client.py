@@ -300,7 +300,7 @@ class TelethonClient:
         return _msg_info(msg, chat_id, with_reply=False) if msg else None
 
     async def send_scheduled_message(
-        self, chat_id: int, text: str, schedule_date: Any, *, parse_mode: str = "html"
+        self, chat_id: int, text: str, schedule_date: Any, *, parse_mode: str | None = "html"
     ) -> MessageInfo | None:
         logger.info("Sending scheduled message", chat_id=chat_id, schedule=str(schedule_date))
         msg = await self._call(
@@ -309,7 +309,7 @@ class TelethonClient:
         return _msg_info(msg, chat_id, with_reply=False) if msg else None
 
     async def send_scheduled_photo(
-        self, chat_id: int, photo: str, caption: str, schedule_date: Any, *, parse_mode: str = "html"
+        self, chat_id: int, photo: str, caption: str, schedule_date: Any, *, parse_mode: str | None = "html"
     ) -> MessageInfo | None:
         logger.info("Sending scheduled photo", chat_id=chat_id, schedule=str(schedule_date))
         msg = await self._call(

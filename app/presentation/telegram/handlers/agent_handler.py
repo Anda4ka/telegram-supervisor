@@ -156,7 +156,10 @@ async def handle_escalation_action(
         await memory.set_admin_override(escalation.decision_id, chosen_action)
 
     # Execute admin's chosen action directly (no AgentCore dependency needed)
-    action_type = ActionType(chosen_action) if chosen_action in ActionType.__members__.values() else ActionType.IGNORE
+    try:
+        action_type = ActionType(chosen_action)
+    except ValueError:
+        action_type = ActionType.IGNORE
 
     if action_type != ActionType.IGNORE:
         from app.moderation.agent import AgentCore

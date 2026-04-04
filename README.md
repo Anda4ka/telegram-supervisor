@@ -188,6 +188,12 @@ Messages revoked in 3 chats.
 | **Admin Feedback Loop** | Generation learns from past approve/reject decisions |
 | **Source Management** | RSS health tracking, auto-discovery via Perplexity Sonar, SSRF-protected validation |
 | **Scheduled Publishing** | Telegram Client API (Telethon) for native scheduled messages |
+| **Content Calendar** | `/calendar` — 7-day view of scheduled posts with best-time recommendations |
+| **Competitor Intelligence** | Monitor competitor channels, track posting frequency and top topics |
+| **Engagement Prediction** | LLM-based scoring before publication: 🟢/🟡/🔴 with view estimates |
+| **Smart Notifications** | Viral post alerts (2x+ views), LLM cost alerts, with cooldown anti-spam |
+| **Startup Health Checks** | Auto-validates DB, Bot API, OpenRouter, Telethon on startup with graceful degradation |
+| **Setup Wizard** | `/setup` command guides new admins through channel configuration step by step |
 | **Mechanical Moderation** | /mute, /ban, /blacklist, welcome messages, spam detection — no LLM overhead |
 | **Cost Tracking** | Per-operation LLM cost breakdown with cache savings, persisted to DB |
 | **600+ Tests** | Unit, integration, e2e with FakeTelegramServer and testcontainers |
@@ -251,15 +257,16 @@ Admin: "Analyze voice as 'meme' preset"
 
 ```
 app/
-├── core/                   # Config, logging, DI container, enums, TTL cache
+├── core/                   # Config, logging, DI container, enums, healthcheck
 ├── moderation/             # AI moderation: agent, escalation, blacklist, report
 ├── agent/
 │   └── channel/            # Content pipeline
-│       ├── orchestrator.py # Per-channel scheduling + orchestration
+│       ├── orchestrator.py # Per-channel scheduling + graceful shutdown
 │       ├── workflow.py     # Burr state machine (10 actions)
 │       ├── generator.py    # LLM screening + post generation
-│       ├── brand_voice.py  # Brand Voice Engine (style analysis + profiles)
-│       ├── reports.py      # Analytics reports + scheduled delivery
+│       ├── brand_voice.py  # Brand Voice Engine (cached style profiles)
+│       ├── reports.py      # Analytics + competitor intelligence reports
+│       ├── notifications.py# Smart alerts (viral posts, cost spikes)
 │       ├── translate.py    # Multi-language translation with voice
 │       ├── review/         # Review submodule (agent, presentation, service)
 │       ├── semantic_dedup.py
@@ -267,33 +274,38 @@ app/
 │       └── http.py         # SSRF-protected HTTP client
 ├── assistant/              # Conversational admin bot
 │   ├── agent.py            # PydanticAI agent
+│   ├── commands.py         # /stats /sources /settings /calendar /setup /healthcheck
 │   ├── bot.py              # Conversation management
-│   └── tools/              # 30+ tools across 6 modules
+│   └── tools/              # 35+ tools across 7 modules
 ├── infrastructure/         # DB models, BaseRepository, Telethon client
 └── presentation/           # Telegram handlers, middlewares
 ```
 
 ## Quick Start
 
-### Prerequisites
+### One-Command Install (Docker)
 
-- **Python 3.12+** and [uv](https://docs.astral.sh/uv/) (for local dev)
-- **PostgreSQL 17** with [pgvector](https://github.com/pgvector/pgvector) extension
-- **Telegram Bot Token** from [@BotFather](https://t.me/BotFather)
-- **OpenRouter API Key** from [openrouter.ai](https://openrouter.ai) (for AI features)
+```bash
+curl -fsSL https://raw.githubusercontent.com/Anda4ka/telegram-supervisor/main/install.sh | bash
+```
 
-### Docker (recommended)
+The script checks Docker, clones the repo, walks you through 3 questions (bot token, admin ID, OpenRouter key), generates `.env`, and starts everything with `docker compose up -d`.
+
+### Manual Docker Setup
 
 ```bash
 git clone https://github.com/Anda4ka/telegram-supervisor.git
 cd telegram-supervisor
 cp .env.example .env   # fill in tokens, DB credentials, API keys
 
-# Builds the bot + starts PostgreSQL with pgvector
+# All-in-one: bot + PostgreSQL + pgvector
+docker compose -f docker-compose.full.yaml up -d
+
+# Or dev mode (builds from source):
 docker compose up -d
 ```
 
-The `docker-compose.override.yaml` automatically provisions a PostgreSQL 17 + pgvector database. Migrations run on startup via `scripts/entrypoint.sh`.
+Migrations run automatically on startup via `scripts/entrypoint.sh`. AI features gracefully disable if `OPENROUTER_API_KEY` is not set.
 
 ### Local Development
 

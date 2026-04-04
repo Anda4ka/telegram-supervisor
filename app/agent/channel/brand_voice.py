@@ -18,6 +18,10 @@ from app.agent.channel.llm_client import openrouter_chat_completion
 from app.core.logging import get_logger
 from app.core.time import utc_now
 
+# In-memory TTL cache for voice profiles: (channel_id, preset) → (profile, expire_ts)
+_voice_cache: dict[tuple[int, str], tuple[Any, float]] = {}
+_VOICE_CACHE_TTL = 3600  # 1 hour
+
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -276,7 +280,14 @@ async def load_voice_profile(
     channel_id: int,
     preset_name: str = "default",
 ) -> VoiceProfile | None:
-    """Load a voice profile from DB. Returns None if not found."""
+    """Load a voice profile from DB (cached for 1 hour). Returns None if not found."""
+    import time
+
+    cache_key = (channel_id, preset_name)
+    cached = _voice_cache.get(cache_key)
+    if cached and cached[1] > time.monotonic():
+        return cached[0]
+
     from sqlalchemy import select
 
     from app.infrastructure.db.models import ChannelVoiceProfile
@@ -289,9 +300,15 @@ async def load_voice_profile(
             )
         )
         record = result.scalar_one_or_none()
-        if record and record.profile_data:
-            return VoiceProfile.from_dict(record.profile_data)
-    return None
+        profile = VoiceProfile.from_dict(record.profile_data) if record and record.profile_data else None
+
+    _voice_cache[cache_key] = (profile, time.monotonic() + _VOICE_CACHE_TTL)
+    return profile
+
+
+def invalidate_voice_cache(channel_id: int, preset_name: str = "default") -> None:
+    """Clear cached voice profile after re-analysis."""
+    _voice_cache.pop((channel_id, preset_name), None)
 
 
 async def list_voice_presets(
@@ -332,4 +349,5 @@ async def analyze_and_save(
 
     profile = await analyze_posts(posts, api_key, model, language=language, preset_name=preset_name)
     await save_voice_profile(session_maker, channel_id, profile)
+    invalidate_voice_cache(channel_id, preset_name)
     return profile
