@@ -319,6 +319,8 @@ class LLMUsageLog(Base):
     cache_write_tokens: Mapped[int] = mapped_column(Integer, default=0)
     estimated_cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
     cache_savings_usd: Mapped[float] = mapped_column(Float, default=0.0)
+    # TODO: migrate to BigInteger for consistency with Channel.telegram_id (currently String
+    # because cost_tracker passes str(channel_id); changing requires migration + backfill)
     channel_id: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=utc_now, index=True)
 

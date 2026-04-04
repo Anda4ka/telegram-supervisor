@@ -296,56 +296,34 @@ async def _get_best_time(session_maker: Any, channel_id: int) -> dict[str, Any] 
 
 
 def _analyze_topics(approved_posts: list[Any]) -> list[tuple[str, int]]:
-    """Extract top topic keywords from approved post titles."""
+    """Extract top topic bigrams from approved post titles.
+
+    Uses bigrams (2-word phrases) instead of single words for more meaningful
+    topic detection: "бесплатный copilot", "airdrop farming" vs just "copilot".
+    """
     if not approved_posts:
         return []
 
-    # Simple keyword extraction from titles
     import re
     from collections import Counter
 
     stop_words = {
-        "в",
-        "на",
-        "и",
-        "с",
-        "для",
-        "по",
-        "от",
-        "к",
-        "из",
-        "что",
-        "как",
-        "это",
-        "the",
-        "a",
-        "an",
-        "in",
-        "on",
-        "for",
-        "to",
-        "of",
-        "and",
-        "is",
-        "are",
-        "—",
-        "–",
-        "-",
-        "|",
-        ":",
-        "не",
-        "но",
-        "или",
-        "уже",
+        "в", "на", "и", "с", "для", "по", "от", "к", "из", "что", "как", "это",
+        "the", "a", "an", "in", "on", "for", "to", "of", "and", "is", "are",
+        "не", "но", "или", "уже", "при", "все", "так", "его", "она", "они",
     }
 
-    words: list[str] = []
+    bigrams: list[str] = []
     for post in approved_posts:
         title = post.title if hasattr(post, "title") else ""
-        tokens = re.findall(r"[a-zA-Zа-яА-ЯёЁ]{3,}", title.lower())
-        words.extend(t for t in tokens if t not in stop_words)
+        tokens = [t for t in re.findall(r"[a-zA-Zа-яА-ЯёЁ]{3,}", title.lower()) if t not in stop_words]
+        # Generate bigrams
+        for i in range(len(tokens) - 1):
+            bigrams.append(f"{tokens[i]} {tokens[i + 1]}")
+        # Also add significant single words (4+ chars) as fallback
+        bigrams.extend(t for t in tokens if len(t) >= 5)
 
-    return Counter(words).most_common(10)
+    return Counter(bigrams).most_common(10)
 
 
 def _trend(current: float, previous: float, *, lower_is_better: bool = False) -> str:
