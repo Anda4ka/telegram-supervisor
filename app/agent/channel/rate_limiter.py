@@ -27,8 +27,8 @@ class AsyncRateLimiter:
 
     async def acquire(self) -> None:
         """Wait until a token is available, then consume it."""
-        async with self._lock:
-            while True:
+        while True:
+            async with self._lock:
                 now = time.monotonic()
                 elapsed = now - self._last_refill
                 self._tokens = min(self._burst, self._tokens + elapsed * self._rate)
@@ -38,9 +38,10 @@ class AsyncRateLimiter:
                     self._tokens -= 1.0
                     return
 
-                # Wait for enough time to get one token
                 wait_time = (1.0 - self._tokens) / self._rate
-                await asyncio.sleep(wait_time)
+
+            # Sleep OUTSIDE lock so other coroutines can check/acquire
+            await asyncio.sleep(wait_time)
 
     async def __aenter__(self) -> AsyncRateLimiter:
         await self.acquire()

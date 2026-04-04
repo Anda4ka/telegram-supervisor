@@ -60,11 +60,11 @@ async def generate_channel_report(
         top_posts = await _get_top_posts(session, channel_id, cutoff, limit=3)
 
         # ── LLM costs ──
-        costs = await _get_cost_stats(session, cutoff)
-        prev_costs = await _get_cost_stats(session, prev_cutoff, cutoff)
+        costs = await _get_cost_stats(session, channel_id, cutoff)
+        prev_costs = await _get_cost_stats(session, channel_id, prev_cutoff, cutoff)
 
         # ── Cost per operation ──
-        ops = await _get_cost_by_operation(session, cutoff)
+        ops = await _get_cost_by_operation(session, channel_id, cutoff)
 
     # ── Best time recommendation ──
     best_time = await _get_best_time(session_maker, channel_id)
@@ -242,13 +242,18 @@ async def _get_top_posts(session: AsyncSession, channel_id: int, after: Any, lim
         return []
 
 
-async def _get_cost_stats(session: AsyncSession, after: Any, before: Any | None = None) -> dict[str, Any]:
+async def _get_cost_stats(
+    session: AsyncSession, channel_id: int, after: Any, before: Any | None = None
+) -> dict[str, Any]:
     query = select(
         func.sum(LLMUsageLog.estimated_cost_usd).label("total_cost"),
         func.sum(LLMUsageLog.cache_savings_usd).label("total_savings"),
         func.sum(LLMUsageLog.total_tokens).label("total_tokens"),
         func.count().label("total_calls"),
-    ).where(LLMUsageLog.created_at >= after)
+    ).where(
+        LLMUsageLog.created_at >= after,
+        LLMUsageLog.channel_id == str(channel_id),
+    )
     if before is not None:
         query = query.where(LLMUsageLog.created_at < before)
     result = await session.execute(query)
@@ -263,14 +268,14 @@ async def _get_cost_stats(session: AsyncSession, after: Any, before: Any | None 
     return {}
 
 
-async def _get_cost_by_operation(session: AsyncSession, after: Any) -> list[tuple[str, float, int]]:
+async def _get_cost_by_operation(session: AsyncSession, channel_id: int, after: Any) -> list[tuple[str, float, int]]:
     result = await session.execute(
         select(
             LLMUsageLog.operation,
             func.sum(LLMUsageLog.estimated_cost_usd).label("cost"),
             func.count().label("calls"),
         )
-        .where(LLMUsageLog.created_at >= after)
+        .where(LLMUsageLog.created_at >= after, LLMUsageLog.channel_id == str(channel_id))
         .group_by(LLMUsageLog.operation)
         .order_by(func.sum(LLMUsageLog.estimated_cost_usd).desc())
     )
@@ -403,6 +408,24 @@ def _build_recommendations(
 
 # ── Send to admin ──
 
+_TG_MSG_LIMIT = 4000  # Telegram limit 4096, leave margin for entities
+
+
+def _split_report(text: str, max_len: int) -> list[str]:
+    """Split report text at line boundaries to fit Telegram message limit."""
+    if len(text) <= max_len:
+        return [text]
+    chunks: list[str] = []
+    current = ""
+    for line in text.split("\n"):
+        if len(current) + len(line) + 1 > max_len and current:
+            chunks.append(current.rstrip())
+            current = ""
+        current += line + "\n"
+    if current.strip():
+        chunks.append(current.rstrip())
+    return chunks or [text[:max_len]]
+
 
 async def send_report_to_admin(
     bot: Bot,
@@ -411,19 +434,21 @@ async def send_report_to_admin(
     channel_id: int,
     days: int = 7,
 ) -> bool:
-    """Generate and send a report to the admin."""
+    """Generate and send a report to the admin. Splits long reports into chunks."""
     try:
         from app.core.markdown import md_to_entities
 
         report = await generate_channel_report(session_maker, channel_id, days=days)
-        plain, entities = md_to_entities(report)
-        await bot.send_message(
-            chat_id=admin_chat_id,
-            text=plain,
-            entities=entities,
-            parse_mode=None,
-        )
-        logger.info("report_sent", admin_chat_id=admin_chat_id, channel_id=channel_id, days=days)
+        chunks = _split_report(report, _TG_MSG_LIMIT)
+        for chunk in chunks:
+            plain, entities = md_to_entities(chunk)
+            await bot.send_message(
+                chat_id=admin_chat_id,
+                text=plain,
+                entities=entities,
+                parse_mode=None,
+            )
+        logger.info("report_sent", admin_chat_id=admin_chat_id, channel_id=channel_id, days=days, chunks=len(chunks))
         return True
     except Exception:
         logger.exception("report_send_failed", channel_id=channel_id)
@@ -457,6 +482,8 @@ class ReportScheduler:
         self._task: asyncio.Task[None] | None = None
 
     def start(self) -> None:
+        if self._task and not self._task.done():
+            return  # already running
         self._task = asyncio.create_task(self._run_loop())
         logger.info("report_scheduler_started", channels=len(self.channel_ids))
 

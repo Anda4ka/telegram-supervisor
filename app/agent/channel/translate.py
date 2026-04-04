@@ -127,15 +127,22 @@ async def translate_to_multiple(
     model: str,
     *,
     voice_profile: VoiceProfile | None = None,
+    max_concurrent: int = 3,
 ) -> dict[str, str]:
-    """Translate a post to multiple languages.
+    """Translate a post to multiple languages concurrently.
 
     Returns a dict mapping language code → translated text.
     Failed translations are silently skipped.
     """
-    results: dict[str, str] = {}
-    for lang in target_languages:
-        translated = await translate_post(text, lang, api_key, model, voice_profile=voice_profile)
-        if translated:
-            results[lang] = translated
-    return results
+    import asyncio
+
+    semaphore = asyncio.Semaphore(max_concurrent)
+
+    async def _translate_one(lang: str) -> tuple[str, str | None]:
+        async with semaphore:
+            result = await translate_post(text, lang, api_key, model, voice_profile=voice_profile)
+            return lang, result
+
+    tasks = [_translate_one(lang) for lang in target_languages]
+    completed = await asyncio.gather(*tasks)
+    return {lang: translated for lang, translated in completed if translated}
